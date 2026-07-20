@@ -1,0 +1,8 @@
+{
+  "name": "@personalise-kings/observability",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "build": "tsc --noEmit", "typecheck": "tsc --noEmit", "test": "vitest run --passWithNoTests" },
+  "devDependencies": { "typescript": "^5.9.2", "vitest": "^4.0.15" }
+}

@@ -1,0 +1,537 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum StoreType {
+  woocommerce
+  shopify
+}
+
+enum ConnectionStatus {
+  pending
+  connected
+  disconnected
+  revoked
+  failed
+}
+
+enum StaffRole {
+  owner_admin
+  designer
+  production_operator
+  support
+  auditor
+}
+
+enum AssetKind {
+  font
+  artwork
+  clipart
+  upload
+  mockup
+  preview
+  production_artifact
+}
+
+enum AssetValidationStatus {
+  pending
+  accepted
+  rejected
+  quarantined
+  deleted
+}
+
+enum CustomisationStatus {
+  draft
+  committed
+  ordered
+  ready
+  needs_review
+  failed
+  cancelled
+  archived
+}
+
+enum PrintJobStatus {
+  queued
+  running
+  ready
+  needs_review
+  failed
+  cancelled
+}
+
+model Merchant {
+  id               String                 @id @default(cuid())
+  name             String
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+  users            StaffUser[]
+  stores           Store[]
+  designs          Design[]
+  assets           Asset[]
+  outputProfiles   OutputProfile[]
+  customisations   CustomisationSession[]
+  orders           ExternalOrder[]
+  auditEvents      AuditEvent[]
+  deletionRequests DeletionRequest[]
+  settings         MerchantSettings?
+}
+
+model MerchantSettings {
+  id                              String   @id @default(cuid())
+  merchantId                      String   @unique
+  temporaryUploadRetentionDays    Int      @default(15)
+  previewRetentionDays            Int      @default(30)
+  productionArtifactRetentionDays Int      @default(90)
+  createdAt                       DateTime @default(now())
+  updatedAt                       DateTime @updatedAt
+  merchant                        Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+}
+
+model StaffUser {
+  id           String    @id @default(cuid())
+  merchantId   String
+  email        String
+  passwordHash String
+  role         StaffRole
+  mfaEnabled   Boolean   @default(false)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  merchant     Merchant  @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  @@unique([merchantId, email])
+  @@index([merchantId, role])
+}
+
+model Store {
+  id                         String                      @id @default(cuid())
+  merchantId                 String
+  type                       StoreType
+  url                        String
+  externalStoreId            String?
+  connectionStatus           ConnectionStatus            @default(pending)
+  connectionLastCheckedAt    DateTime?
+  connectionLastSuccessfulAt DateTime?
+  connectionLastFailedAt     DateTime?
+  connectionLastError        String?
+  connectionRevokedAt        DateTime?
+  webhookSigningKeyId        String?
+  webhookSecretEncrypted     String?
+  credentialReference        String?
+  createdAt                  DateTime                    @default(now())
+  updatedAt                  DateTime                    @updatedAt
+  merchant                   Merchant                    @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  credential                 StoreCredential?
+  wooCommerceAuthAttempts    WooCommerceAuthAttempt[]
+  productMappings            ProductMapping[]
+  webhookDeliveries          WebhookDelivery[]
+  orders                     ExternalOrder[]
+  customisations             CustomisationSession[]
+
+  @@unique([id, merchantId])
+  @@unique([id, webhookSigningKeyId])
+  @@unique([merchantId, type, url])
+  @@index([merchantId, type])
+}
+
+model StoreCredential {
+  id               String   @id @default(cuid())
+  merchantId       String
+  storeId          String
+  encryptedPayload String
+  externalKeyId    String?
+  permissions      String
+  source           String
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  store            Store    @relation(fields: [storeId, merchantId], references: [id, merchantId], onDelete: Cascade)
+
+  @@unique([id, merchantId])
+  @@unique([storeId, merchantId])
+  @@index([merchantId])
+}
+
+model WooCommerceAuthAttempt {
+  id                 String    @id
+  merchantId         String
+  storeId            String
+  actorUserId        String
+  expiresAt          DateTime
+  callbackReceivedAt DateTime?
+  returnedAt         DateTime?
+  returnSucceeded    Boolean?
+  cancelledAt        DateTime?
+  createdAt          DateTime  @default(now())
+  store              Store     @relation(fields: [storeId, merchantId], references: [id, merchantId], onDelete: Cascade)
+
+  @@index([merchantId, expiresAt])
+  @@index([storeId, createdAt])
+}
+
+model ProductMapping {
+  id                 String   @id @default(cuid())
+  merchantId         String
+  storeId            String
+  externalProductId  String
+  externalVariantId  String?
+  externalVariantKey String   @default("")
+  designId           String
+  priceModifierMinor Int      @default(0)
+  active             Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  store              Store    @relation(fields: [storeId, merchantId], references: [id, merchantId], onDelete: Cascade)
+  design             Design   @relation(fields: [designId, merchantId], references: [id, merchantId], onDelete: Restrict)
+
+  @@unique([storeId, externalProductId, externalVariantKey])
+  @@index([merchantId, active])
+}
+
+model Design {
+  id               String                 @id @default(cuid())
+  merchantId       String
+  name             String
+  currentVersionId String?
+  archivedAt       DateTime?
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+  merchant         Merchant               @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  versions         DesignVersion[]
+  currentVersion   DesignVersion?         @relation("CurrentDesignVersion", fields: [currentVersionId, id], references: [id, designId], onDelete: Restrict)
+  mappings         ProductMapping[]
+  customisations   CustomisationSession[]
+
+  @@unique([id, merchantId])
+  @@unique([currentVersionId, id])
+  @@index([merchantId, archivedAt])
+}
+
+model DesignVersion {
+  id               String                  @id @default(cuid())
+  merchantId       String
+  designId         String
+  version          Int
+  sceneGraph       Json
+  customiserConfig Json?
+  createdAt        DateTime                @default(now())
+  design           Design                  @relation(fields: [designId, merchantId], references: [id, merchantId], onDelete: Cascade)
+  currentForDesign Design?                 @relation("CurrentDesignVersion")
+  revisions        CustomisationRevision[]
+  snapshots        OrderArtworkSnapshot[]
+
+  @@unique([designId, version])
+  @@unique([id, designId])
+  @@unique([id, merchantId])
+  @@index([merchantId, designId])
+}
+
+model Asset {
+  id         String         @id @default(cuid())
+  merchantId String
+  kind       AssetKind
+  name       String
+  createdAt  DateTime       @default(now())
+  merchant   Merchant       @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  versions   AssetVersion[]
+
+  @@unique([id, merchantId])
+  @@index([merchantId, kind])
+}
+
+model AssetVersion {
+  id               String                @id @default(cuid())
+  merchantId       String
+  assetId          String
+  version          Int
+  objectKey        String
+  checksumSha256   String
+  byteSize         BigInt
+  contentType      String
+  widthPx          Int?
+  heightPx         Int?
+  validationStatus AssetValidationStatus @default(pending)
+  deletedAt        DateTime?
+  createdAt        DateTime              @default(now())
+  asset            Asset                 @relation(fields: [assetId, merchantId], references: [id, merchantId], onDelete: Cascade)
+
+  @@unique([assetId, version])
+  @@unique([id, merchantId])
+  @@index([merchantId, validationStatus])
+  @@index([objectKey])
+}
+
+model OutputProfile {
+  id              String                 @id @default(cuid())
+  merchantId      String
+  name            String
+  activeVersionId String?
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+  merchant        Merchant               @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  versions        OutputProfileVersion[]
+  activeVersion   OutputProfileVersion?  @relation("ActiveOutputProfileVersion", fields: [activeVersionId, id], references: [id, outputProfileId], onDelete: Restrict)
+
+  @@unique([id, merchantId])
+  @@unique([activeVersionId, id])
+  @@index([merchantId])
+}
+
+model OutputProfileVersion {
+  id                   String                 @id @default(cuid())
+  merchantId           String
+  outputProfileId      String
+  version              Int
+  printerModel         String
+  ripName              String
+  ripVersion           String
+  outputFormat         String                 @default("pdf")
+  widthUm              Int
+  heightUm             Int
+  bleedUm              Int                    @default(0)
+  processColourSpace   String
+  whiteSpotName        String                 @default("RDG_WHITE")
+  glossSpotName        String                 @default("RDG_Gloss")
+  inkSequence          Json
+  overprintPolicy      Json
+  whiteMaskPolicy      Json
+  glossMaskPolicy      Json
+  preflightRuleVersion String
+  createdAt            DateTime               @default(now())
+  outputProfile        OutputProfile          @relation(fields: [outputProfileId, merchantId], references: [id, merchantId], onDelete: Cascade)
+  activeForProfile     OutputProfile?         @relation("ActiveOutputProfileVersion")
+  snapshots            OrderArtworkSnapshot[]
+  artifacts            GeneratedArtifact[]
+
+  @@unique([outputProfileId, version])
+  @@unique([id, outputProfileId])
+  @@unique([id, merchantId])
+  @@index([merchantId, outputProfileId])
+}
+
+model CustomisationSession {
+  id                String                  @id @default(cuid())
+  merchantId        String
+  storeId           String
+  designId          String
+  externalProductId String
+  externalVariantId String?
+  customerInputs    Json
+  renderSpec        Json?
+  previewAssetId    String?
+  status            CustomisationStatus     @default(draft)
+  expiresAt         DateTime?
+  createdAt         DateTime                @default(now())
+  updatedAt         DateTime                @updatedAt
+  merchant          Merchant                @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  store             Store                   @relation(fields: [storeId, merchantId], references: [id, merchantId], onDelete: Cascade)
+  design            Design                  @relation(fields: [designId, merchantId], references: [id, merchantId], onDelete: Restrict)
+  revisions         CustomisationRevision[]
+
+  @@unique([id, merchantId])
+  @@index([merchantId, status])
+  @@index([storeId, externalProductId, externalVariantId])
+}
+
+model CustomisationRevision {
+  id              String                 @id @default(cuid())
+  merchantId      String
+  sessionId       String
+  designVersionId String
+  revision        Int
+  opaqueReference String                 @unique
+  customerInputs  Json
+  renderSpec      Json
+  committedAt     DateTime               @default(now())
+  session         CustomisationSession   @relation(fields: [sessionId, merchantId], references: [id, merchantId], onDelete: Cascade)
+  designVersion   DesignVersion          @relation(fields: [designVersionId, merchantId], references: [id, merchantId], onDelete: Restrict)
+  lineItems       EcommerceLineItem[]
+  snapshots       OrderArtworkSnapshot[]
+
+  @@unique([sessionId, revision])
+  @@unique([id, merchantId])
+  @@index([merchantId, committedAt])
+}
+
+model ExternalOrder {
+  id                  String              @id @default(cuid())
+  merchantId          String
+  storeId             String
+  externalOrderId     String
+  externalOrderNumber String?
+  currency            String
+  status              String
+  rawPayload          Json
+  lastEventAt         DateTime?
+  lastEventType       String?
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+  merchant            Merchant            @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  store               Store               @relation(fields: [storeId, merchantId], references: [id, merchantId], onDelete: Cascade)
+  lineItems           EcommerceLineItem[]
+  printJobs           PrintJob[]
+
+  @@unique([storeId, externalOrderId])
+  @@unique([id, merchantId])
+  @@index([merchantId, status])
+  @@index([storeId, lastEventAt])
+}
+
+model EcommerceLineItem {
+  id                      String                 @id @default(cuid())
+  merchantId              String
+  orderId                 String
+  externalLineItemId      String
+  externalProductId       String
+  externalVariantId       String?
+  quantity                Int
+  customisationRevisionId String?
+  metadata                Json
+  order                   ExternalOrder          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  customisationRevision   CustomisationRevision? @relation(fields: [customisationRevisionId], references: [id], onDelete: SetNull)
+
+  @@index([merchantId, externalProductId, externalVariantId])
+  @@index([customisationRevisionId])
+}
+
+model OrderArtworkSnapshot {
+  id                      String                @id @default(cuid())
+  merchantId              String
+  customisationRevisionId String
+  designVersionId         String
+  outputProfileVersionId  String
+  renderSpecSchemaVersion String
+  snapshot                Json
+  createdAt               DateTime              @default(now())
+  customisationRevision   CustomisationRevision @relation(fields: [customisationRevisionId], references: [id], onDelete: Restrict)
+  designVersion           DesignVersion         @relation(fields: [designVersionId], references: [id], onDelete: Restrict)
+  outputProfileVersion    OutputProfileVersion  @relation(fields: [outputProfileVersionId], references: [id], onDelete: Restrict)
+  printJobs               PrintJob[]
+
+  @@index([merchantId, createdAt])
+}
+
+model PrintJob {
+  id                String               @id @default(cuid())
+  merchantId        String
+  orderId           String
+  artworkSnapshotId String
+  status            PrintJobStatus       @default(queued)
+  retryCount        Int                  @default(0)
+  lastError         String?
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+  order             ExternalOrder        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  artworkSnapshot   OrderArtworkSnapshot @relation(fields: [artworkSnapshotId], references: [id], onDelete: Restrict)
+  attempts          PrintJobAttempt[]
+
+  @@index([merchantId, status])
+}
+
+model PrintJobAttempt {
+  id            String              @id @default(cuid())
+  merchantId    String
+  printJobId    String
+  attemptNumber Int
+  status        PrintJobStatus
+  logs          Json
+  startedAt     DateTime            @default(now())
+  finishedAt    DateTime?
+  printJob      PrintJob            @relation(fields: [printJobId], references: [id], onDelete: Cascade)
+  artifacts     GeneratedArtifact[]
+
+  @@unique([printJobId, attemptNumber])
+  @@index([merchantId, status])
+}
+
+model GeneratedArtifact {
+  id                     String               @id @default(cuid())
+  merchantId             String
+  printJobAttemptId      String
+  outputProfileVersionId String
+  artifactType           String
+  objectKey              String
+  checksumSha256         String
+  byteSize               BigInt
+  preflightStatus        String
+  createdAt              DateTime             @default(now())
+  printJobAttempt        PrintJobAttempt      @relation(fields: [printJobAttemptId], references: [id], onDelete: Cascade)
+  outputProfileVersion   OutputProfileVersion @relation(fields: [outputProfileVersionId], references: [id], onDelete: Restrict)
+
+  @@index([merchantId, artifactType])
+}
+
+model WebhookDelivery {
+  id                  String    @id @default(cuid())
+  merchantId          String
+  storeId             String
+  eventId             String
+  eventType           String
+  eventVersion        String
+  connectorInstanceId String
+  idempotencyKey      String
+  nonce               String
+  contentDigest       String
+  rawPayload          Json
+  processedAt         DateTime?
+  processingStartedAt DateTime?
+  failedAt            DateTime?
+  error               String?
+  receivedAt          DateTime  @default(now())
+  store               Store     @relation(fields: [storeId, merchantId], references: [id, merchantId], onDelete: Cascade)
+
+  @@unique([storeId, eventId])
+  @@unique([storeId, idempotencyKey])
+  @@unique([storeId, nonce])
+  @@index([merchantId, processedAt])
+}
+
+model OutboxEvent {
+  id            String    @id @default(cuid())
+  merchantId    String
+  eventType     String
+  aggregateType String
+  aggregateId   String
+  payload       Json
+  correlationId String
+  dispatchedAt  DateTime?
+  failedAt      DateTime?
+  error         String?
+  createdAt     DateTime  @default(now())
+
+  @@index([merchantId, dispatchedAt, createdAt])
+}
+
+model AuditEvent {
+  id          String   @id @default(cuid())
+  merchantId  String
+  actorUserId String?
+  action      String
+  targetType  String
+  targetId    String
+  metadata    Json
+  createdAt   DateTime @default(now())
+  merchant    Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  @@index([merchantId, action, createdAt])
+}
+
+model DeletionRequest {
+  id               String    @id @default(cuid())
+  merchantId       String
+  subjectType      String
+  subjectId        String
+  status           String
+  liveDeletedAt    DateTime?
+  backupExpiryNote String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  merchant         Merchant  @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  @@index([merchantId, status])
+}

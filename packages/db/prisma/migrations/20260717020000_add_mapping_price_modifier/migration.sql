@@ -1,0 +1,2 @@
+ALTER TABLE "ProductMapping"
+ADD COLUMN "priceModifierMinor" INTEGER NOT NULL DEFAULT 0;

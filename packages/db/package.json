@@ -1,0 +1,22 @@
+{
+  "name": "@personalise-kings/db",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "prisma": "prisma",
+    "seed": "bun src/seed.ts"
+  },
+  "dependencies": {
+    "@personalise-kings/auth": "workspace:*",
+    "@prisma/client": "^6.19.0"
+  },
+  "devDependencies": {
+    "prisma": "^6.19.0",
+    "typescript": "^5.9.2",
+    "vitest": "^4.0.15"
+  }
+}

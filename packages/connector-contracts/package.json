@@ -1,0 +1,9 @@
+{
+  "name": "@personalise-kings/connector-contracts",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "build": "tsc --noEmit", "typecheck": "tsc --noEmit", "test": "vitest run --passWithNoTests" },
+  "dependencies": { "zod": "4.4.3" },
+  "devDependencies": { "typescript": "^5.9.2", "vitest": "^4.0.15" }
+}

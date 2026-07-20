@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["DOM", "DOM.Iterable", "ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": {
+      "@personalise-kings/auth": ["packages/auth/src/index.ts"],
+      "@personalise-kings/connector-contracts": ["packages/connector-contracts/src/index.ts"],
+      "@personalise-kings/db": ["packages/db/src/index.ts"],
+      "@personalise-kings/observability": ["packages/observability/src/index.ts"],
+      "@personalise-kings/render-schema": ["packages/render-schema/src/index.ts"],
+      "@personalise-kings/storage": ["packages/storage/src/index.ts"]
+    }
+  }
+}

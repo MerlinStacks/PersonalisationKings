@@ -1,0 +1,22 @@
+{
+  "name": "@personalise-kings/worker-maintenance",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --watch src/index.ts",
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@personalise-kings/db": "workspace:*",
+    "@personalise-kings/observability": "workspace:*",
+    "@personalise-kings/storage": "workspace:*",
+    "@prisma/client": "^6.19.0"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.14",
+    "typescript": "^5.9.2",
+    "vitest": "^4.0.15"
+  }
+}
