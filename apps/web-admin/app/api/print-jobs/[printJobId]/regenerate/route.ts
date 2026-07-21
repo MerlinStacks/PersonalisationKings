@@ -2,10 +2,13 @@ import { prisma } from "@personalise-kings/db";
 import { badRequest, notFound, ok, toInputJson } from "../../../../../lib/api";
 import { writeAuditEvent } from "../../../../../lib/audit";
 import { requirePermission } from "../../../../../lib/rbac";
+import { requireSameOrigin } from "../../../../../lib/same-origin";
 
 const regeneratableStatuses = ["failed", "needs_review", "ready", "cancelled"] as const;
 
-export async function POST(_request: Request, { params }: Readonly<{ params: Promise<{ printJobId: string }> }>) {
+export async function POST(request: Request, { params }: Readonly<{ params: Promise<{ printJobId: string }> }>) {
+  const originError = requireSameOrigin(request);
+  if (originError) return originError;
   const access = await requirePermission("regenerate_artifact");
   if (access.error) return access.error;
 

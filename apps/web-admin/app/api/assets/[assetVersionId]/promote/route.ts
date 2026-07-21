@@ -3,6 +3,7 @@ import { createObjectStorageFromEnv, objectKey, validateRasterUpload, type Stora
 import { badRequest, ok } from "../../../../../lib/api";
 import { writeAuditEvent } from "../../../../../lib/audit";
 import { getAdminSession } from "../../../../../lib/session";
+import { requireSameOrigin } from "../../../../../lib/same-origin";
 
 const assetStorageClass: Record<string, StorageClass> = {
   font: "merchant_design_asset",
@@ -14,7 +15,9 @@ const assetStorageClass: Record<string, StorageClass> = {
   production_artifact: "production_artifact"
 };
 
-export async function POST(_request: Request, { params }: Readonly<{ params: Promise<{ assetVersionId: string }> }>) {
+export async function POST(request: Request, { params }: Readonly<{ params: Promise<{ assetVersionId: string }> }>) {
+  const originError = requireSameOrigin(request);
+  if (originError) return originError;
   const session = await getAdminSession();
   const { assetVersionId } = await params;
 
@@ -30,9 +33,15 @@ export async function POST(_request: Request, { params }: Readonly<{ params: Pro
   const storage = createObjectStorageFromEnv();
   const bytes = await storage.getObject(assetVersion.objectKey as never);
   const uploadValidation = assetVersion.asset.kind === "upload" ? validateRasterUpload(bytes) : null;
+  const uploadRejection = BigInt(bytes.byteLength) > assetVersion.byteSize
+    ? "Uploaded file exceeds its approved size"
+    : uploadValidation?.accepted && uploadValidation.detectedContentType !== assetVersion.contentType
+      ? "Detected file type does not match the approved upload type"
+      : uploadValidation?.accepted === false
+        ? uploadValidation.reason ?? "Upload validation failed"
+        : null;
 
-  if (uploadValidation) {
-    if (!uploadValidation.accepted) {
+  if (uploadValidation && uploadRejection) {
       const quarantinedKey = objectKey("quarantined_file", session.merchantId, assetVersion.id);
       await storage.putObject(quarantinedKey, bytes, assetVersion.contentType);
       await storage.deleteObject(assetVersion.objectKey as never);
@@ -51,11 +60,10 @@ export async function POST(_request: Request, { params }: Readonly<{ params: Pro
         action: "asset.reject_upload",
         targetType: "AssetVersion",
         targetId: assetVersion.id,
-        metadata: { reason: uploadValidation.reason, objectKey: quarantinedKey }
+        metadata: { reason: uploadRejection, objectKey: quarantinedKey }
       });
 
-      return badRequest(uploadValidation.reason ?? "Upload validation failed");
-    }
+      return badRequest(uploadRejection);
   }
 
   const destinationKey = objectKey(assetStorageClass[assetVersion.asset.kind], session.merchantId, assetVersion.id);

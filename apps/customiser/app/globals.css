@@ -118,6 +118,19 @@ button:disabled, input:disabled { cursor: not-allowed; opacity: 0.58; }
   pointer-events: none;
 }
 
+.scene-artwork {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  pointer-events: none;
+}
+
+.scene-artwork > svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
 .preview-layer {
   position: absolute;
   z-index: 1;
@@ -136,6 +149,7 @@ button:disabled, input:disabled { cursor: not-allowed; opacity: 0.58; }
 .preview-layer.selected { outline: max(1px, 0.22cqw) solid var(--forest); outline-offset: max(2px, 0.3cqw); }
 .preview-layer.movable { cursor: grab; touch-action: none; user-select: none; }
 .preview-layer.movable:active { cursor: grabbing; }
+.artwork-backed .preview-layer > * { visibility: hidden; }
 
 .text-preview {
   max-width: calc(100% - 8px);

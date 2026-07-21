@@ -14,19 +14,23 @@ import {
 } from "./embed";
 import { canonicalJson } from "./json";
 import { handleObjectRequest } from "./objects";
+import { InvalidRequestEncodingError, readRequestText, RequestBodyTooLargeError, UnsupportedMediaTypeError } from "./request-body";
+import { consumeRateLimit } from "./rate-limit";
 
 const port = Number(process.env.PORT ?? 3002);
 const replayWindowSeconds = Number(process.env.PK_CONNECTOR_REPLAY_WINDOW_SECONDS ?? 300);
 
-Bun.serve({
-  port,
-  async fetch(request: Request) {
+export async function handleApiRequest(request: Request, peerAddress = "unknown") {
     const url = new URL(request.url);
     const correlationId = getOrCreateCorrelationId(request.headers);
     try {
+      const limited = applyRateLimit(request, url, peerAddress, correlationId);
+      if (limited) return limited;
       if (url.pathname === "/health") return Response.json({ ok: true, service: "personalise-kings-api", correlationId });
       if (url.pathname.startsWith("/objects/") && request.method === "OPTIONS") {
-        return objectCors(preflightResponse(), request.headers.get("origin") ?? "");
+        const origin = request.headers.get("origin") ?? "";
+        if (!browserOrigins().has(origin)) return new Response(null, { status: 403 });
+        return objectCors(preflightResponse(), origin);
       }
       if (url.pathname.startsWith("/objects/")) {
         return objectCors(await handleObjectRequest(request, url, correlationId), request.headers.get("origin") ?? "");
@@ -43,27 +47,30 @@ Bun.serve({
       }
       if (url.pathname === "/v1/customiser/commit" && request.method === "POST") {
         const origin = request.headers.get("origin") ?? "";
-        return customiserCors(await handleCustomiserCommit(request, correlationId), origin);
+        const rawBody = await readJsonBody(request, 1024 * 1024);
+        return customiserCors(await handleCustomiserCommit(request, rawBody, correlationId), origin);
       }
       if (url.pathname === "/v1/customiser/uploads" && request.method === "POST") {
         const origin = request.headers.get("origin") ?? "";
-        return customiserCors(await handleCreateCustomiserUpload(request, correlationId), origin);
+        const rawBody = await readJsonBody(request, 8 * 1024);
+        return customiserCors(await handleCreateCustomiserUpload(request, rawBody, correlationId), origin);
       }
       const uploadPromotion = /^\/v1\/customiser\/uploads\/([^/]+)\/promote$/.exec(url.pathname);
       if (uploadPromotion && request.method === "POST") {
         const origin = request.headers.get("origin") ?? "";
-        return customiserCors(await handlePromoteCustomiserUpload(request, uploadPromotion[1], correlationId), origin);
+        const rawBody = await readJsonBody(request, 4 * 1024);
+        return customiserCors(await handlePromoteCustomiserUpload(request, uploadPromotion[1], rawBody, correlationId), origin);
       }
       if (url.pathname === "/v1/customiser/embed-token" && request.method === "POST") {
-        const rawBody = await request.text();
+        const rawBody = await readJsonBody(request, 16 * 1024);
         return handleCreateEmbedToken(request, rawBody, correlationId);
       }
       if (url.pathname === "/v1/customiser/mapping-lookup" && request.method === "POST") {
-        const rawBody = await request.text();
+        const rawBody = await readJsonBody(request, 8 * 1024);
         return handleMappingLookup(request, rawBody, correlationId);
       }
       if (url.pathname === "/v1/connector/events" && request.method === "POST") {
-        const rawBody = await request.text();
+        const rawBody = await readJsonBody(request, 1024 * 1024);
         const value = parseJson(rawBody);
         const parsed = connectorEventEnvelopeSchema.safeParse(value);
         if (!parsed.success) return Response.json({ error: "invalid_event", correlationId }, { status: 400 });
@@ -95,14 +102,64 @@ Bun.serve({
       }
       return Response.json({ error: "not_found", correlationId }, { status: 404 });
     } catch (error) {
+      if (error instanceof RequestBodyTooLargeError) {
+        return Response.json({ error: "body_too_large", correlationId }, { status: 413, headers: { "cache-control": "no-store" } });
+      }
+      if (error instanceof InvalidRequestEncodingError) {
+        return Response.json({ error: "invalid_body_encoding", correlationId }, { status: 400, headers: { "cache-control": "no-store" } });
+      }
+      if (error instanceof UnsupportedMediaTypeError) {
+        return Response.json({ error: "unsupported_media_type", correlationId }, { status: 415, headers: { "cache-control": "no-store" } });
+      }
       if (error instanceof InvalidCustomisationReferenceError) {
         return Response.json({ error: "invalid_customisation_reference", lineItemId: error.lineItemId, correlationId }, { status: 422 });
       }
       console.error("API request failed", { correlationId, error });
       return Response.json({ error: "internal_error", correlationId }, { status: 500 });
     }
+}
+
+Bun.serve({
+  port,
+  async fetch(request, server) {
+    const response = await handleApiRequest(request, server.requestIP(request)?.address ?? "unknown");
+    return apiSecurityHeaders(response);
   }
 });
+
+async function readJsonBody(request: Request, maximumBytes: number) {
+  const contentType = request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
+  if (contentType !== "application/json") throw new UnsupportedMediaTypeError("Content-Type must be application/json");
+  return readRequestText(request, maximumBytes);
+}
+
+function applyRateLimit(request: Request, url: URL, peerAddress: string, correlationId: string) {
+  if (request.method === "OPTIONS" || url.pathname === "/health") return null;
+  const objectRequest = url.pathname.startsWith("/objects/");
+  const limit = objectRequest ? (request.method === "PUT" ? 30 : 600)
+    : url.pathname === "/v1/connector/events" ? 300
+      : url.pathname.includes("/uploads") ? 30
+        : 120;
+  const credential = request.headers.get("authorization")
+    ?? request.headers.get("x-pk-key-id")
+    ?? url.searchParams.get("signature")
+    ?? "anonymous";
+  const key = createHash("sha256").update(`${peerAddress}\n${url.pathname}\n${credential}`).digest("base64url");
+  const result = consumeRateLimit(key, limit, 60_000);
+  if (result.allowed) return null;
+  return Response.json({ error: "rate_limited", correlationId }, {
+    status: 429,
+    headers: { "retry-after": String(result.retryAfterSeconds), "cache-control": "no-store" }
+  });
+}
+
+function apiSecurityHeaders(response: Response) {
+  const headers = new Headers(response.headers);
+  headers.set("x-content-type-options", "nosniff");
+  headers.set("referrer-policy", "no-referrer");
+  headers.set("permissions-policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), accelerometer=(), gyroscope=(), magnetometer=()");
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
 
 function parseJson(rawBody: string) {
   try { return JSON.parse(rawBody) as unknown; } catch { return null; }
@@ -144,7 +201,8 @@ function cors(response: Response, origin: string) {
   headers.set("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS");
   headers.set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Correlation-ID, X-PK-Customisation-Reference");
   headers.set("Access-Control-Max-Age", "600");
-  headers.set("Vary", "Origin");
+  const vary = headers.get("Vary");
+  headers.set("Vary", vary ? `${vary}, Origin` : "Origin");
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 

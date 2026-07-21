@@ -14,6 +14,7 @@ import { randomUUID } from "node:crypto";
 import * as z from "zod";
 import { toInputJson } from "./json";
 import { authenticateStoreRequest } from "./connector-auth";
+import { generateRevisionPreview } from "./preview";
 
 const commitSchema = z.object({
   embed_token: z.string().min(1),
@@ -183,6 +184,7 @@ export async function handleCustomiserConfig(request: Request, correlationId: st
   })));
 
   return Response.json({
+    parent_origin: access.context.token.allowedOrigin,
     design: {
       id: access.context.mapping.designId,
       name: access.context.design.name,
@@ -205,8 +207,8 @@ export async function handleCustomiserConfig(request: Request, correlationId: st
   });
 }
 
-export async function handleCreateCustomiserUpload(request: Request, correlationId: string) {
-  const parsedBody = uploadIntentSchema.safeParse(await request.json().catch(() => null));
+export async function handleCreateCustomiserUpload(request: Request, rawBody: string, correlationId: string) {
+  const parsedBody = uploadIntentSchema.safeParse(parseJson(rawBody));
   if (!parsedBody.success) {
     return Response.json({ error: "invalid_body", correlationId }, { status: 400 });
   }
@@ -260,9 +262,10 @@ export async function handleCreateCustomiserUpload(request: Request, correlation
 export async function handlePromoteCustomiserUpload(
   request: Request,
   assetVersionId: string,
+  rawBody: string,
   correlationId: string
 ) {
-  const parsedBody = promoteUploadSchema.safeParse(await request.json().catch(() => null));
+  const parsedBody = promoteUploadSchema.safeParse(parseJson(rawBody));
   if (!parsedBody.success) {
     return Response.json({ error: "invalid_body", correlationId }, { status: 400 });
   }
@@ -293,8 +296,10 @@ export async function handlePromoteCustomiserUpload(
     return Response.json({ error: "upload_incomplete", correlationId }, { status: 409 });
   }
 
-  const validation = validateRasterUpload(bytes);
-  if (!validation.accepted) {
+  const validation = BigInt(bytes.byteLength) > assetVersion.byteSize
+    ? { accepted: false as const, reason: "Uploaded file exceeds its approved size" }
+    : validateRasterUpload(bytes);
+  if (!validation.accepted || (validation.detectedContentType && validation.detectedContentType !== assetVersion.contentType)) {
     const quarantinedKey = objectKey("quarantined_file", merchantId, assetVersion.id);
     await storage.putObject(quarantinedKey, bytes, assetVersion.contentType);
     await storage.deleteObject(assetVersion.objectKey as ObjectKey);
@@ -309,11 +314,18 @@ export async function handlePromoteCustomiserUpload(
           action: "customiser.upload_rejected",
           targetType: "AssetVersion",
           targetId: assetVersion.id,
-          metadata: { reason: validation.reason ?? "Upload validation failed", correlationId }
+          metadata: {
+            reason: validation.reason ?? "Detected file type does not match the approved upload type",
+            correlationId
+          }
         }
       })
     ]);
-    return Response.json({ error: "upload_rejected", message: validation.reason, correlationId }, { status: 422 });
+    return Response.json({
+      error: "upload_rejected",
+      message: validation.reason ?? "Detected file type does not match the approved upload type",
+      correlationId
+    }, { status: 422 });
   }
 
   const destinationKey = objectKey("draft_customisation_asset", merchantId, assetVersion.id);
@@ -343,8 +355,8 @@ export async function handlePromoteCustomiserUpload(
   });
 }
 
-export async function handleCustomiserCommit(request: Request, correlationId: string) {
-  const parsedBody = commitSchema.safeParse(await request.json().catch(() => null));
+export async function handleCustomiserCommit(request: Request, rawBody: string, correlationId: string) {
+  const parsedBody = commitSchema.safeParse(parseJson(rawBody));
   if (!parsedBody.success) {
     return Response.json({ error: "invalid_body", correlationId }, { status: 400 });
   }
@@ -358,13 +370,23 @@ export async function handleCustomiserCommit(request: Request, correlationId: st
     return Response.json({ error: "render_spec_mismatch", correlationId }, { status: 422 });
   }
 
-  if (!await referencedAssetVersions(store.merchantId, parsedBody.data.render_spec, configuration.customiserConfig)) {
+  const previewSources = await referencedAssetVersions(store.merchantId, parsedBody.data.render_spec, configuration.customiserConfig);
+  if (!previewSources) {
     return Response.json({ error: "invalid_asset_reference", correlationId }, { status: 422 });
   }
 
   let result;
   try {
     result = await prisma.$transaction(async (tx) => {
+      const liveAssetCount = await tx.assetVersion.count({
+        where: {
+          id: { in: previewSources.map((version) => version.id) },
+          merchantId: store.merchantId,
+          validationStatus: "accepted",
+          deletedAt: null
+        }
+      });
+      if (liveAssetCount !== previewSources.length) throw new DeletedAssetReferenceError();
       const baseRevision = parsedBody.data.base_customisation_reference
         ? await findEditableRevision(tx, access.context, parsedBody.data.base_customisation_reference)
         : null;
@@ -408,10 +430,35 @@ export async function handleCustomiserCommit(request: Request, correlationId: st
       return { session, revision, resumed: Boolean(baseRevision) };
     }, { isolationLevel: "Serializable" });
   } catch (error) {
+    if (error instanceof DeletedAssetReferenceError) {
+      return Response.json({ error: "invalid_asset_reference", correlationId }, { status: 422 });
+    }
     if (error instanceof StaleCustomisationError || isPrismaTransactionConflict(error)) {
       return Response.json({ error: "stale_customisation", correlationId }, { status: 409 });
     }
     throw error;
+  }
+
+  let previewUrl: string | undefined;
+  let previewAssetVersionId: string | undefined;
+  try {
+    const preview = await generateRevisionPreview(
+      result.revision.id,
+      store.merchantId,
+      parsedBody.data.render_spec,
+      previewSources
+    );
+    previewAssetVersionId = preview.id;
+    previewUrl = await createObjectStorageFromEnv().createSignedGetUrl(preview.objectKey as ObjectKey, 15 * 60);
+  } catch (error) {
+    console.error(JSON.stringify({
+      level: "error",
+      event: "customisation_preview_failed",
+      correlationId,
+      merchantId: store.merchantId,
+      revisionId: result.revision.id,
+      message: error instanceof Error ? error.message : "Unknown preview generation error"
+    }));
   }
 
   return Response.json({
@@ -419,6 +466,9 @@ export async function handleCustomiserCommit(request: Request, correlationId: st
     customisation_session_id: result.session.id,
     revision: result.revision.revision,
     resumed: result.resumed,
+    preview_asset_version_id: previewAssetVersionId,
+    preview_url: previewUrl,
+    proof_status: previewAssetVersionId ? "queued" : "unavailable",
     summary: summariseInputs(parsedBody.data.customer_inputs),
     correlationId
   });
@@ -579,6 +629,7 @@ function isOpaqueCustomisationReference(value: string) {
 }
 
 class StaleCustomisationError extends Error {}
+class DeletedAssetReferenceError extends Error {}
 
 function isPrismaTransactionConflict(error: unknown) {
   if (!error || typeof error !== "object" || !("code" in error)) return false;

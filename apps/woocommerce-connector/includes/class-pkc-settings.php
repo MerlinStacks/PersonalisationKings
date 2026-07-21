@@ -16,6 +16,7 @@ class PKC_Settings {
     public const OPTION_STORE_ID = 'pkc_store_id';
     public const OPTION_KEY_ID = 'pkc_key_id';
     public const OPTION_SECRET = 'pkc_signing_secret';
+    public const OPTION_CREDENTIAL = 'pkc_signing_credential';
     public const OPTION_LAST_SUCCESS = 'pkc_last_successful_delivery';
     public const OPTION_LAST_FAILURE = 'pkc_last_failed_delivery';
     public const OPTION_LAST_ERROR = 'pkc_last_delivery_error';
@@ -23,6 +24,7 @@ class PKC_Settings {
     public const OPTION_LAST_RECONCILIATION = 'pkc_last_reconciliation';
     public const OPTION_LAST_RECONCILIATION_COUNT = 'pkc_last_reconciliation_count';
     public const OPTION_RECONCILIATION_ERROR = 'pkc_reconciliation_error';
+    public const OPTION_PLACEMENT = 'pkc_customiser_placement';
 
     private PKC_Outbox $outbox;
 
@@ -56,8 +58,15 @@ class PKC_Settings {
         register_setting( 'pkc_settings', self::OPTION_WEBAPP_URL, array( 'sanitize_callback' => 'esc_url_raw' ) );
         register_setting( 'pkc_settings', self::OPTION_API_URL, array( 'sanitize_callback' => 'esc_url_raw' ) );
         register_setting( 'pkc_settings', self::OPTION_STORE_ID, array( 'sanitize_callback' => 'sanitize_text_field' ) );
-        register_setting( 'pkc_settings', self::OPTION_KEY_ID, array( 'sanitize_callback' => 'sanitize_text_field' ) );
-        register_setting( 'pkc_settings', self::OPTION_SECRET, array( 'sanitize_callback' => 'sanitize_text_field' ) );
+        register_setting( 'pkc_settings', self::OPTION_CREDENTIAL, array( 'sanitize_callback' => array( $this, 'sanitize_signing_credential' ) ) );
+        register_setting(
+            'pkc_settings',
+            self::OPTION_PLACEMENT,
+            array(
+                'default'           => 'classic',
+                'sanitize_callback' => array( $this, 'sanitize_placement' ),
+            )
+        );
     }
 
     /**
@@ -86,8 +95,21 @@ class PKC_Settings {
                     <?php $this->render_input( self::OPTION_WEBAPP_URL, __( 'Customiser webapp URL', 'personalise-kings-connector' ), 'http://localhost:3001' ); ?>
                     <?php $this->render_input( self::OPTION_API_URL, __( 'Connector API URL', 'personalise-kings-connector' ), 'http://localhost:3002' ); ?>
                     <?php $this->render_input( self::OPTION_STORE_ID, __( 'PersonaliseKings store ID', 'personalise-kings-connector' ), '' ); ?>
-                    <?php $this->render_input( self::OPTION_KEY_ID, __( 'Signing key ID', 'personalise-kings-connector' ), '' ); ?>
-                    <?php $this->render_input( self::OPTION_SECRET, __( 'Signing secret', 'personalise-kings-connector' ), '' ); ?>
+                    <?php $credential = self::signing_credential(); ?>
+                    <tr><th scope="row"><?php echo esc_html__( 'Active signing key', 'personalise-kings-connector' ); ?></th><td><code><?php echo esc_html( $credential['key_id'] ?? __( 'Not configured', 'personalise-kings-connector' ) ); ?></code></td></tr>
+                    <tr><th scope="row"><label for="pkc_replacement_key_id"><?php echo esc_html__( 'Replacement signing key ID', 'personalise-kings-connector' ); ?></label></th><td><input class="regular-text" id="pkc_replacement_key_id" name="<?php echo esc_attr( self::OPTION_CREDENTIAL ); ?>[key_id]" value="" autocomplete="off" /></td></tr>
+                    <tr><th scope="row"><label for="pkc_replacement_secret"><?php echo esc_html__( 'Replacement signing secret', 'personalise-kings-connector' ); ?></label></th><td><input class="regular-text" type="password" id="pkc_replacement_secret" name="<?php echo esc_attr( self::OPTION_CREDENTIAL ); ?>[secret]" value="" autocomplete="new-password" /><p class="description"><?php echo esc_html__( 'Enter the key ID and secret together. Leaving either blank keeps the current credential.', 'personalise-kings-connector' ); ?></p></td></tr>
+                    <tr>
+                        <th scope="row"><label for="<?php echo esc_attr( self::OPTION_PLACEMENT ); ?>"><?php echo esc_html__( 'Customiser placement', 'personalise-kings-connector' ); ?></label></th>
+                        <td>
+                            <select id="<?php echo esc_attr( self::OPTION_PLACEMENT ); ?>" name="<?php echo esc_attr( self::OPTION_PLACEMENT ); ?>">
+                                <?php foreach ( $this->placement_options() as $value => $label ) : ?>
+                                    <option value="<?php echo esc_attr( $value ); ?>" <?php selected( get_option( self::OPTION_PLACEMENT, 'classic' ), $value ); ?>><?php echo esc_html( $label ); ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                            <p class="description"><?php echo wp_kses_post( __( 'Block/manual mode disables automatic output. Add the <strong>PersonaliseKings Customiser</strong> block, use <code>[personalise_kings_customiser]</code>, or call <code>personalise_kings_render_customiser()</code> in a product template.', 'personalise-kings-connector' ) ); ?></p>
+                        </td>
+                    </tr>
                 </table>
                 <?php submit_button(); ?>
             </form>
@@ -204,6 +226,63 @@ class PKC_Settings {
             <td><input class="regular-text" id="<?php echo esc_attr( $option ); ?>" name="<?php echo esc_attr( $option ); ?>" value="<?php echo esc_attr( (string) get_option( $option, '' ) ); ?>" placeholder="<?php echo esc_attr( $placeholder ); ?>" /></td>
         </tr>
         <?php
+    }
+
+    /**
+     * Return one atomic signing credential snapshot, migrating a complete legacy pair once.
+     *
+     * @return array{key_id:string,secret:string}|null
+     */
+    public static function signing_credential(): ?array {
+        $credential = get_option( self::OPTION_CREDENTIAL, null );
+        if ( is_array( $credential ) && ! empty( $credential['key_id'] ) && ! empty( $credential['secret'] ) ) {
+            return array( 'key_id' => (string) $credential['key_id'], 'secret' => (string) $credential['secret'] );
+        }
+        $key_id = (string) get_option( self::OPTION_KEY_ID, '' );
+        $secret = (string) get_option( self::OPTION_SECRET, '' );
+        if ( '' === $key_id || '' === $secret ) return null;
+        $credential = array( 'key_id' => $key_id, 'secret' => $secret );
+        add_option( self::OPTION_CREDENTIAL, $credential, '', false );
+        return $credential;
+    }
+
+    /**
+     * Replace the credential only when both submitted values are present.
+     *
+     * @param mixed $value Submitted credential fields.
+     * @return array{key_id:string,secret:string}|null
+     */
+    public function sanitize_signing_credential( $value ): ?array {
+        $current = self::signing_credential();
+        if ( ! is_array( $value ) ) return $current;
+        $key_id = isset( $value['key_id'] ) ? sanitize_text_field( (string) $value['key_id'] ) : '';
+        $secret = isset( $value['secret'] ) ? sanitize_text_field( (string) $value['secret'] ) : '';
+        if ( '' === $key_id || '' === $secret ) return $current;
+        return array( 'key_id' => $key_id, 'secret' => $secret );
+    }
+
+    /**
+     * Restrict customiser placement to supported adapters.
+     *
+     * @param mixed $placement Submitted option value.
+     */
+    public function sanitize_placement( $placement ): string {
+        $placement = sanitize_key( (string) $placement );
+        return array_key_exists( $placement, $this->placement_options() ) ? $placement : 'classic';
+    }
+
+    /**
+     * Return selectable placement adapters.
+     *
+     * @return array<string, string>
+     */
+    private function placement_options(): array {
+        return array(
+            'classic' => __( 'Before add to cart (classic)', 'personalise-kings-connector' ),
+            'gallery' => __( 'Replace product gallery', 'personalise-kings-connector' ),
+            'modal'   => __( 'Open in modal', 'personalise-kings-connector' ),
+            'manual'  => __( 'Block, shortcode, or theme code', 'personalise-kings-connector' ),
+        );
     }
 
     /**

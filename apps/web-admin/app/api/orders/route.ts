@@ -15,7 +15,26 @@ export async function GET() {
   const orders = await prisma.externalOrder.findMany({
     where: { merchantId: session.merchantId },
     orderBy: { createdAt: "desc" },
-    include: { lineItems: true, printJobs: true },
+    include: {
+      lineItems: {
+        include: {
+          customisationRevision: {
+            include: {
+              previewAssetVersion: {
+                select: { id: true, contentType: true, widthPx: true, heightPx: true, validationStatus: true, deletedAt: true }
+              },
+              proofJob: {
+                select: {
+                  id: true, status: true, attempts: true, rendererVersion: true, lastError: true,
+                  proofAssetVersion: { select: { id: true, contentType: true, widthPx: true, heightPx: true, validationStatus: true, deletedAt: true } }
+                }
+              }
+            }
+          }
+        }
+      },
+      printJobs: true
+    },
     take: 50
   });
 

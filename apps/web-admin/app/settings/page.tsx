@@ -1,6 +1,7 @@
 import { prisma } from "@personalise-kings/db";
 import { safeQuery } from "../../lib/data";
 import { getAdminSession } from "../../lib/session";
+import { SecuritySettings } from "../../components/security-settings";
 
 export default async function SettingsPage() {
   const session = await getAdminSession();
@@ -9,6 +10,15 @@ export default async function SettingsPage() {
     update: {},
     create: { merchantId: session.merchantId }
   }), null);
+  const [staff, sessions, recoveryCodesRemaining] = await Promise.all([
+    prisma.staffUser.findUnique({ where: { id: session.userId }, select: { mfaEnabledAt: true } }),
+    prisma.adminSession.findMany({
+      where: { staffUserId: session.userId, revokedAt: null, expiresAt: { gt: new Date() }, mfaVerifiedAt: { not: null } },
+      orderBy: { lastSeenAt: "desc" },
+      select: { id: true, createdAt: true, lastSeenAt: true, expiresAt: true, userAgent: true }
+    }),
+    prisma.staffRecoveryCode.count({ where: { staffUserId: session.userId, usedAt: null } })
+  ]);
 
   return (
     <main className="page-shell">
@@ -20,6 +30,12 @@ export default async function SettingsPage() {
         </div>
       </header>
       <section className="grid">
+        <SecuritySettings
+          currentSessionId={session.sessionId}
+          sessions={sessions.map((item) => ({ ...item, createdAt: item.createdAt.toISOString(), lastSeenAt: item.lastSeenAt.toISOString(), expiresAt: item.expiresAt.toISOString() }))}
+          recoveryCodesRemaining={recoveryCodesRemaining}
+          mfaEnabledAt={staff?.mfaEnabledAt?.toISOString() ?? null}
+        />
         <article className="card accent">
           <h2>Default UV Profile</h2>
           <p>White spot: RDG_WHITE</p>
@@ -32,7 +48,7 @@ export default async function SettingsPage() {
           <p>Temporary uploads: {settings?.temporaryUploadRetentionDays ?? 15} days</p>
           <p>Previews: {settings?.previewRetentionDays ?? 30} days</p>
           <p>Production artifacts: {settings?.productionArtifactRetentionDays ?? 90} days</p>
-          <p>Customer uploads require deletion and erasure workflows before private beta.</p>
+          <p>Eligible unordered customer uploads can be erased from live storage through Deletion Requests. Ordered artwork remains blocked until a legal and operational retention policy is configured.</p>
         </article>
       </section>
     </main>

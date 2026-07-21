@@ -1,13 +1,17 @@
-import { encryptConnectorSecret, hashPassword } from "@personalise-kings/auth";
+import { encryptStoreWebhookSecret, hashPassword } from "@personalise-kings/auth";
 import { PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();
 
 async function main() {
   const demoPasswordHash = await hashPassword("password123");
-  const connectorEncryptionKey = process.env.PK_CONNECTOR_SECRET_ENCRYPTION_KEY
-    ?? Buffer.alloc(32, 1).toString("base64");
+  if (process.env.NODE_ENV === "production" && (!process.env.PK_CONNECTOR_SECRET_ENCRYPTION_KEY || !process.env.PK_DEMO_CONNECTOR_SECRET)) {
+    throw new Error("Production seed requires explicit connector encryption and demo signing secrets");
+  }
+  const connectorEncryptionKey = process.env.PK_CONNECTOR_SECRET_ENCRYPTION_KEY ?? Buffer.alloc(32, 1).toString("base64");
   const connectorSecret = process.env.PK_DEMO_CONNECTOR_SECRET ?? "dev-connector-secret-change-me";
+  const demoKeyId = "demo-key";
+  const encryptedDemoSecret = encryptStoreWebhookSecret(connectorSecret, connectorEncryptionKey, "seed-store", demoKeyId);
 
   const merchant = await prisma.merchant.upsert({
     where: { id: "seed-merchant" },
@@ -43,8 +47,9 @@ async function main() {
   const store = await prisma.store.upsert({
     where: { id: "seed-store" },
     update: {
-      webhookSigningKeyId: "demo-key",
-      webhookSecretEncrypted: encryptConnectorSecret(connectorSecret, connectorEncryptionKey)
+      webhookSigningKeyId: demoKeyId,
+      webhookSecretEncrypted: encryptedDemoSecret,
+      activeWebhookSigningKeyId: demoKeyId
     },
     create: {
       id: "seed-store",
@@ -53,9 +58,15 @@ async function main() {
       url: "https://example.test",
       externalStoreId: "demo-woo",
       connectionStatus: "connected",
-      webhookSigningKeyId: "demo-key",
-      webhookSecretEncrypted: encryptConnectorSecret(connectorSecret, connectorEncryptionKey)
+      webhookSigningKeyId: demoKeyId,
+      webhookSecretEncrypted: encryptedDemoSecret,
+      activeWebhookSigningKeyId: demoKeyId
     }
+  });
+  await prisma.storeWebhookSigningKey.upsert({
+    where: { storeId_keyId: { storeId: store.id, keyId: demoKeyId } },
+    update: { secretEncrypted: encryptedDemoSecret, retiredAt: null, revokedAt: null },
+    create: { merchantId: merchant.id, storeId: store.id, keyId: demoKeyId, secretEncrypted: encryptedDemoSecret }
   });
 
   const fontAsset = await prisma.asset.upsert({

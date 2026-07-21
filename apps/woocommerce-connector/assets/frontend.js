@@ -6,15 +6,50 @@
   var referenceInput = container.querySelector('input[name="pk_customisation_reference"]');
   var status = container.querySelector('[data-pkc-status]');
   var priceAdjustment = container.querySelector('[data-pkc-price-adjustment]');
-  var cartForm = container.closest('form.cart');
+  var cartForm = container.closest('form.cart') || document.querySelector('form.cart');
   var addToCartButton = cartForm && cartForm.querySelector('.single_add_to_cart_button');
+  var modal = container.closest('[data-pkc-modal]');
   var customiserOrigin = container.dataset.customiserOrigin;
   var correlationId = container.dataset.correlationId;
   var currentVariant = container.dataset.editVariant || '';
   var refreshSequence = 0;
   var cartUpdatePending = false;
 
+  if (cartForm && referenceInput && !cartForm.contains(referenceInput)) {
+    var formReferenceInput = cartForm.querySelector('input[name="pk_customisation_reference"]');
+    if (!formReferenceInput) {
+      formReferenceInput = document.createElement('input');
+      formReferenceInput.type = 'hidden';
+      formReferenceInput.name = 'pk_customisation_reference';
+      cartForm.appendChild(formReferenceInput);
+    }
+    formReferenceInput.value = referenceInput.value;
+    referenceInput = formReferenceInput;
+  }
+
   if (addToCartButton && container.dataset.editCartKey) addToCartButton.hidden = true;
+
+  if (modal) {
+    var openButton = document.querySelector('[data-pkc-modal-open]');
+    var closeButton = modal.querySelector('[data-pkc-modal-close]');
+    var closeModal = function () {
+      if (typeof modal.close === 'function') modal.close();
+      else {
+        modal.removeAttribute('open');
+        document.body.classList.remove('pkc-modal-open');
+      }
+    };
+    if (openButton) openButton.addEventListener('click', function () {
+      if (typeof modal.showModal === 'function') modal.showModal();
+      else modal.setAttribute('open', '');
+      document.body.classList.add('pkc-modal-open');
+    });
+    if (closeButton) closeButton.addEventListener('click', closeModal);
+    modal.addEventListener('click', function (event) {
+      if (event.target === modal) closeModal();
+    });
+    modal.addEventListener('close', function () { document.body.classList.remove('pkc-modal-open'); });
+  }
 
   function messageId() {
     return window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : String(Date.now()) + Math.random();

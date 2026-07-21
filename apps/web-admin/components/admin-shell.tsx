@@ -1,22 +1,22 @@
-import { ROLE_LABELS } from "@personalise-kings/auth";
+import { ROLE_LABELS, roleCan, type Permission } from "@personalise-kings/auth";
 import Link from "next/link";
 import { getOptionalAdminSession } from "../lib/session";
 
-const navItems = [
+const navItems: ReadonlyArray<readonly [string, string, Permission?]> = [
   ["Dashboard", "/"],
-  ["Stores", "/stores"],
-  ["Designs", "/designs"],
-  ["Profiles", "/output-profiles"],
-  ["Mappings", "/product-mappings"],
-  ["Assets", "/assets"],
-  ["Orders", "/orders"],
-  ["Print Jobs", "/print-jobs"],
-  ["Artifacts", "/artifacts"],
-  ["Staff", "/staff"],
-  ["Deletion", "/deletion-requests"],
-  ["Audit", "/audit"],
+  ["Stores", "/stores", "manage_store"],
+  ["Designs", "/designs", "manage_design"],
+  ["Profiles", "/output-profiles", "manage_design"],
+  ["Mappings", "/product-mappings", "manage_store"],
+  ["Assets", "/assets", "manage_design"],
+  ["Orders", "/orders", "view_order"],
+  ["Print Jobs", "/print-jobs", "view_order"],
+  ["Artifacts", "/artifacts", "download_artifact"],
+  ["Staff", "/staff", "manage_staff"],
+  ["Deletion", "/deletion-requests", "delete_asset"],
+  ["Audit", "/audit", "view_audit"],
   ["Settings", "/settings"]
-] as const;
+];
 
 export async function AdminShell({ children }: Readonly<{ children: React.ReactNode }>) {
   const session = await getOptionalAdminSession();
@@ -29,7 +29,7 @@ export async function AdminShell({ children }: Readonly<{ children: React.ReactN
           <>
             <p className="session-pill">{ROLE_LABELS[session.role]}</p>
             <nav>
-              {navItems.map(([label, href]) => (
+              {navItems.filter(([, , permission]) => !permission || roleCan(session.role, permission)).map(([label, href]) => (
                 <Link key={href} href={href}>{label}</Link>
               ))}
             </nav>

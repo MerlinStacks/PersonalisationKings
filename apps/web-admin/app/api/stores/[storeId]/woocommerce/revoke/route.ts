@@ -24,13 +24,15 @@ export async function POST(request: Request, { params }: Readonly<{ params: Prom
       data: { cancelledAt: now }
     });
     await tx.storeCredential.deleteMany({ where: { storeId: store.id, merchantId: access.session.merchantId } });
+    await tx.storeWebhookSigningKey.updateMany({ where: { storeId: store.id, revokedAt: null }, data: { revokedAt: now } });
     await tx.store.update({
       where: { id_merchantId: { id: store.id, merchantId: access.session.merchantId } },
       data: {
         credentialReference: null,
         connectionStatus: "revoked",
         connectionRevokedAt: now,
-        connectionLastError: null
+        connectionLastError: null,
+        activeWebhookSigningKeyId: null
       }
     });
     await writeAuditEvent({

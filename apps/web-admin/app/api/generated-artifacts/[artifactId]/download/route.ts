@@ -3,8 +3,11 @@ import { createObjectStorageFromEnv, isObjectKey } from "@personalise-kings/stor
 import { badRequest, notFound, ok } from "../../../../../lib/api";
 import { writeAuditEvent } from "../../../../../lib/audit";
 import { requirePermission } from "../../../../../lib/rbac";
+import { requireSameOrigin } from "../../../../../lib/same-origin";
 
-export async function POST(_request: Request, { params }: Readonly<{ params: Promise<{ artifactId: string }> }>) {
+export async function POST(request: Request, { params }: Readonly<{ params: Promise<{ artifactId: string }> }>) {
+  const originError = requireSameOrigin(request);
+  if (originError) return originError;
   const access = await requirePermission("download_artifact");
   if (access.error) return access.error;
 

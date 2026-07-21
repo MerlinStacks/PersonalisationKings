@@ -14,6 +14,7 @@ export default async function StoresPage({ searchParams }: Readonly<{
     orderBy: { createdAt: "desc" },
     include: {
       credential: { select: { source: true, permissions: true, updatedAt: true } },
+      webhookSigningKeys: { orderBy: { createdAt: "desc" }, select: { keyId: true, createdAt: true, retiredAt: true, revokedAt: true } },
       _count: { select: { productMappings: true, orders: true } }
     }
   }), []);
@@ -42,6 +43,8 @@ export default async function StoresPage({ searchParams }: Readonly<{
           credentialSource: store.credential?.source ?? null,
           credentialPermissions: store.credential?.permissions ?? null,
           credentialUpdatedAt: store.credential?.updatedAt.toISOString() ?? null,
+          activeSigningKeyId: store.activeWebhookSigningKeyId,
+          signingKeys: store.webhookSigningKeys.map((key) => ({ ...key, createdAt: key.createdAt.toISOString(), retiredAt: key.retiredAt?.toISOString() ?? null, revokedAt: key.revokedAt?.toISOString() ?? null })),
           lastCheckedAt: store.connectionLastCheckedAt?.toISOString() ?? null,
           lastSuccessfulAt: store.connectionLastSuccessfulAt?.toISOString() ?? null,
           lastFailedAt: store.connectionLastFailedAt?.toISOString() ?? null,

@@ -7,8 +7,10 @@ Standalone personalisation platform for WooCommerce-first product customisation,
 - `apps/web-admin` merchant/admin webapp
 - `apps/customiser` hosted iframe-first customer customiser
 - `apps/api` platform-neutral connector API
+- `apps/worker-proof` isolated Playwright PNG proof worker
 - `packages/db` Prisma schema and database client
 - `packages/render-schema` canonical scene graph schema
+- `packages/design-engine` deterministic canonical SVG preview renderer
 - `packages/connector-contracts` signed connector event contracts
 - `packages/auth` MVP roles and permission helpers
 - `packages/storage` object-storage abstraction
@@ -31,9 +33,18 @@ Workers can be started separately:
 ```bash
 bun run worker:maintenance
 bun run worker:render
+bun run worker:proof
 ```
 
 Phase 0 production-export validation still needs the real printer/RIP details before production PDF work begins.
+
+## Continuous Integration
+
+`CI` is the merge and release correctness gate. It installs the committed Bun lockfile, generates and validates Prisma, deploys every migration to a clean PostgreSQL 16 service, validates Compose and connector syntax, then runs all workspace typechecks, tests, and production builds.
+
+`Security` runs on pull requests, protected-branch pushes, a weekly schedule, and manual dispatch. It performs Bun and pull-request dependency audits, full-history secret scanning, Trivy infrastructure configuration scanning, and uploads an SPDX JSON software bill of materials. All third-party workflow actions are commit-SHA pinned; Dependabot proposes grouped weekly action updates.
+
+Configure branch protection for `main` and `develop` to require `Validate workspace` plus every applicable `Security` job. GitHub secret scanning and push protection must also be enabled in repository settings. See [`docs/DEPENDENCY_POLICY.md`](docs/DEPENDENCY_POLICY.md) for supported runtimes, update cadence, vulnerability exceptions, and the container-image gate that activates with production Dockerfiles.
 
 ## Local Object Uploads
 
@@ -45,11 +56,31 @@ The Designs page contains the first constrained builder. Publishing creates an i
 
 Editable customiser layers can be positioned by pointer or touch dragging. Keyboard focus on a layer provides arrow-key movement in 0.5 mm steps, with Shift for 2.5 mm and Alt for 0.1 mm; numeric millimetre inputs remain available as the precise accessible alternative.
 
+The live customiser artwork, committed SVG preview, and Playwright proof input now use the same design engine. The editor keeps transparent accessible controls above that artwork for selection and gestures, avoiding a second visual transform/font implementation while retaining a safe DOM fallback if a referenced asset is temporarily unavailable.
+
+Saving a customisation now generates a deterministic revision-bound SVG preview from the canonical micrometre scene. Referenced font and raster bytes are embedded from accepted tenant-owned asset versions, the preview is stored privately with a checksum, and clients receive only a short-lived signed URL. Preview failure does not invalidate an otherwise valid immutable commit; the correlated failure remains visible to operators for follow-up.
+
+The separate proof worker claims PostgreSQL-backed jobs and renders those self-contained previews to PNG with pinned Playwright Chromium. Browser network access is blocked, dimensions and generated SVG structure are validated, interrupted claims recover after 15 minutes, and temporary failures retry with capped exponential backoff. Start it with `bun run worker:proof`.
+
+Install the pinned proof browser and its Linux libraries on worker hosts with `bunx playwright install --with-deps chromium`. Container images should run that installation during the image build and keep the resulting Playwright browser revision aligned with `apps/worker-proof/package.json`; production should not download a browser at process startup.
+
 On touch screens, two pointers can scale and rotate a selected layer when those controls are enabled by its immutable design policy. Gesture output uses the same bounded permille scale and milli-degree rotation stored in the canonical scene graph.
 
 WooCommerce cart lines now expose an edit link that reopens the latest eligible customisation revision. Saving appends a new immutable revision and replaces only that cart line's opaque reference through a nonce-protected same-origin request. The reference is resolved from the WooCommerce cart session rather than exposed in the edit URL.
 
 The Product Mappings page can create, reassign, activate, and deactivate WooCommerce product or variation mappings. A blank variation ID is an all-variants fallback; an exact variation mapping takes precedence, and an inactive exact mapping can explicitly disable the fallback. The connector performs a signed lookup before rendering a variable-product iframe.
+
+WooCommerce connector `0.8.0` supports classic before-cart placement, mapped-product gallery replacement, a native full-screen modal, and template-controlled placement. Block themes can insert the PersonaliseKings Customiser block; classic templates can use `[personalise_kings_customiser]` or `personalise_kings_render_customiser()`. Rendering is deduplicated if a theme invokes more than one adapter.
+
+Connector `0.9.0` sandboxes the hosted iframe to scripts and its distinct origin, sends no referrer, and disables camera, microphone, geolocation, and payment features. The customiser response binds the token-approved shop origin to the iframe query origin before assets or editing are enabled, while a per-request CSP restricts framing to that exact shop.
+
+API JSON bodies are streamed through route-specific byte limits before parsing, object uploads cannot exceed or change the type approved by their database intent, and a bounded per-process limiter protects current single-instance development deployments. Production ingress must still provide coordinated edge or Redis limits after trusted proxy addresses are explicitly configured.
+
+Deletion Requests execute live erasure for tenant-owned customer upload assets and versions. The maintenance worker scans canonical scenes and snapshots for exact references, blocks design- or order-bound artwork, archives affected unordered sessions, cancels proof work, removes embedded SVG/PNG derivatives and source objects, then deletes live metadata. Requests remain `live_deleted` until an operator separately confirms external backup rotation; backup restoration procedures must replay the external erasure ledger to prevent resurrection.
+
+Admin authentication uses opaque database sessions rather than self-contained cookies. A valid password creates only a ten-minute pending session; users must enroll or verify a TOTP authenticator before the token is rotated into an eight-hour authenticated session. TOTP steps cannot be replayed, recovery codes are high-entropy and single-use, role changes revoke active sessions, and Settings lists sessions for individual or bulk revocation. Configure `PK_ADMIN_MFA_ENCRYPTION_KEY` and `PK_ADMIN_RECOVERY_CODE_PEPPER` before production deployment.
+
+Store connector signing credentials are versioned independently from WooCommerce REST credentials. Creating or rotating a key returns its plaintext secret once, retires the previous key for a controlled overlap, and leaves durable outbox event identities unchanged because delivery signs with the plugin's current atomic credential snapshot. Install the replacement in WooCommerce before revoking the retired key. Connector `0.10.0` migrates a complete legacy key/secret pair into one non-autoloaded option and never renders the stored secret back into settings HTML.
 
 Mappings can apply an integer price change in the store currency's minor units. WooCommerce resolves and briefly caches the signed mapping response, applies the modifier from the product's original price, displays it before and after adding to cart, and preserves it in order-sync metadata. Identical customisation references merge into quantity while different references remain separate cart lines.
 

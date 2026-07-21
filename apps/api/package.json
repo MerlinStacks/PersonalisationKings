@@ -11,6 +11,7 @@
   "dependencies": {
     "@personalise-kings/auth": "workspace:*",
     "@personalise-kings/connector-contracts": "workspace:*",
+    "@personalise-kings/design-engine": "workspace:*",
     "@personalise-kings/db": "workspace:*",
     "@personalise-kings/observability": "workspace:*",
     "@personalise-kings/render-schema": "workspace:*",

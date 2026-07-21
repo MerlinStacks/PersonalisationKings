@@ -42,7 +42,9 @@ export async function POST(request: Request) {
     return badRequest("The mapped store URL is invalid");
   }
 
-  const secret = process.env.PK_EMBED_TOKEN_SECRET ?? "dev-embed-secret-change-me";
+  const secret = process.env.PK_EMBED_TOKEN_SECRET
+    ?? (process.env.NODE_ENV === "production" ? null : "dev-embed-secret-change-me");
+  if (!secret) return ok({ error: "embed_secret_not_configured" }, { status: 503 });
   const token = signEmbedToken({
     storeId: mapping.storeId,
     allowedOrigin,

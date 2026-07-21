@@ -132,7 +132,8 @@ export function createObjectStorageFromEnv() {
 
 export function verifyLocalObjectUrl(method: "GET" | "PUT", key: ObjectKey, expiresAt: number, signature: string) {
   if (!isObjectKey(key)) return false;
-  if (expiresAt < Math.floor(Date.now() / 1000)) {
+  const now = Math.floor(Date.now() / 1000);
+  if (expiresAt < now || expiresAt > now + 24 * 60 * 60) {
     return false;
   }
 
@@ -161,7 +162,10 @@ function signLocalObjectUrl(method: "GET" | "PUT", key: ObjectKey, expiresAt: nu
 }
 
 function localObjectSigningSecret() {
-  return process.env.PK_OBJECT_URL_SECRET ?? "dev-object-url-secret-change-me";
+  const configured = process.env.PK_OBJECT_URL_SECRET;
+  if (configured) return configured;
+  if (process.env.NODE_ENV === "production") throw new Error("PK_OBJECT_URL_SECRET must be configured in production");
+  return "dev-object-url-secret-change-me";
 }
 
 async function streamToBytes(stream: ReadableStream, maximumBytes: number) {

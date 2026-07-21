@@ -1,13 +1,14 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { isObjectKey, LocalObjectStorage, objectKey, type ObjectKey } from "./index";
 
 const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { force: true, recursive: true })));
+  vi.unstubAllEnvs();
 });
 
 describe("object keys", () => {
@@ -82,6 +83,13 @@ describe("LocalObjectStorage", () => {
     await storage.putObject(key, new Uint8Array([1, 2, 3]), "application/octet-stream");
 
     await expect(storage.getObject(key)).resolves.toEqual(new Uint8Array([1, 2, 3]));
+  });
+
+  it("fails closed without an object URL secret in production", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("PK_OBJECT_URL_SECRET", "");
+    const storage = await createStorage();
+    await expect(storage.createSignedGetUrl(objectKey("temporary_upload", "merchant", "asset"), 60)).rejects.toThrow("must be configured");
   });
 
   it("bounds reads of objects already present on disk", async () => {

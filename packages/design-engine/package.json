@@ -1,0 +1,9 @@
+{
+  "name": "@personalise-kings/design-engine",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "build": "tsc --noEmit", "typecheck": "tsc --noEmit", "test": "vitest run" },
+  "dependencies": { "@personalise-kings/render-schema": "workspace:*" },
+  "devDependencies": { "typescript": "^5.9.2", "vitest": "^4.0.15" }
+}

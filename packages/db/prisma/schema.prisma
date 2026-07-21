@@ -66,6 +66,22 @@ enum PrintJobStatus {
   cancelled
 }
 
+enum ProofJobStatus {
+  queued
+  running
+  ready
+  failed
+}
+
+enum DeletionRequestStatus {
+  pending
+  processing
+  blocked_ordered
+  live_deleted
+  completed
+  failed
+}
+
 model Merchant {
   id               String                 @id @default(cuid())
   name             String
@@ -80,6 +96,7 @@ model Merchant {
   orders           ExternalOrder[]
   auditEvents      AuditEvent[]
   deletionRequests DeletionRequest[]
+  proofJobs        ProofJob[]
   settings         MerchantSettings?
 }
 
@@ -101,12 +118,46 @@ model StaffUser {
   passwordHash String
   role         StaffRole
   mfaEnabled   Boolean   @default(false)
+  mfaEnabledAt DateTime?
+  totpSecretEncrypted String?
+  totpLastUsedStep BigInt?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
   merchant     Merchant  @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  adminSessions AdminSession[]
+  recoveryCodes StaffRecoveryCode[]
 
   @@unique([merchantId, email])
   @@index([merchantId, role])
+}
+
+model AdminSession {
+  id                         String    @id @default(cuid())
+  staffUserId                String
+  tokenHash                  String    @unique @db.Char(64)
+  mfaVerifiedAt              DateTime?
+  pendingTotpSecretEncrypted String?
+  pendingTotpExpiresAt       DateTime?
+  createdAt                  DateTime  @default(now())
+  lastSeenAt                 DateTime  @default(now())
+  expiresAt                  DateTime
+  revokedAt                  DateTime?
+  userAgent                  String?
+  staffUser                  StaffUser @relation(fields: [staffUserId], references: [id], onDelete: Cascade)
+
+  @@index([staffUserId, revokedAt, expiresAt])
+  @@index([expiresAt])
+}
+
+model StaffRecoveryCode {
+  id          String    @id @default(cuid())
+  staffUserId String
+  codeHash    String    @unique @db.Char(64)
+  createdAt   DateTime  @default(now())
+  usedAt      DateTime?
+  staffUser   StaffUser @relation(fields: [staffUserId], references: [id], onDelete: Cascade)
+
+  @@index([staffUserId, usedAt])
 }
 
 model Store {
@@ -123,6 +174,7 @@ model Store {
   connectionRevokedAt        DateTime?
   webhookSigningKeyId        String?
   webhookSecretEncrypted     String?
+  activeWebhookSigningKeyId  String?
   credentialReference        String?
   createdAt                  DateTime                    @default(now())
   updatedAt                  DateTime                    @updatedAt
@@ -133,11 +185,28 @@ model Store {
   webhookDeliveries          WebhookDelivery[]
   orders                     ExternalOrder[]
   customisations             CustomisationSession[]
+  webhookSigningKeys         StoreWebhookSigningKey[]
 
   @@unique([id, merchantId])
   @@unique([id, webhookSigningKeyId])
   @@unique([merchantId, type, url])
   @@index([merchantId, type])
+}
+
+model StoreWebhookSigningKey {
+  id              String   @id @default(cuid())
+  merchantId      String
+  storeId         String
+  keyId           String
+  secretEncrypted String
+  createdAt       DateTime @default(now())
+  retiredAt       DateTime?
+  revokedAt       DateTime?
+  store           Store    @relation(fields: [storeId, merchantId], references: [id, merchantId], onDelete: Cascade)
+
+  @@unique([storeId, keyId])
+  @@index([storeId, revokedAt])
+  @@index([merchantId, createdAt])
 }
 
 model StoreCredential {
@@ -259,6 +328,8 @@ model AssetVersion {
   deletedAt        DateTime?
   createdAt        DateTime              @default(now())
   asset            Asset                 @relation(fields: [assetId, merchantId], references: [id, merchantId], onDelete: Cascade)
+  revisionPreviews CustomisationRevision[] @relation("RevisionPreview")
+  proofArtifacts   ProofJob[]               @relation("ProofArtifact")
 
   @@unique([assetId, version])
   @@unique([id, merchantId])
@@ -323,7 +394,6 @@ model CustomisationSession {
   externalVariantId String?
   customerInputs    Json
   renderSpec        Json?
-  previewAssetId    String?
   status            CustomisationStatus     @default(draft)
   expiresAt         DateTime?
   createdAt         DateTime                @default(now())
@@ -347,15 +417,42 @@ model CustomisationRevision {
   opaqueReference String                 @unique
   customerInputs  Json
   renderSpec      Json
+  previewAssetVersionId String?
   committedAt     DateTime               @default(now())
   session         CustomisationSession   @relation(fields: [sessionId, merchantId], references: [id, merchantId], onDelete: Cascade)
   designVersion   DesignVersion          @relation(fields: [designVersionId, merchantId], references: [id, merchantId], onDelete: Restrict)
+  previewAssetVersion AssetVersion?       @relation("RevisionPreview", fields: [previewAssetVersionId, merchantId], references: [id, merchantId], onDelete: Restrict)
   lineItems       EcommerceLineItem[]
   snapshots       OrderArtworkSnapshot[]
+  proofJob        ProofJob?
 
   @@unique([sessionId, revision])
   @@unique([id, merchantId])
   @@index([merchantId, committedAt])
+  @@index([previewAssetVersionId, merchantId])
+}
+
+model ProofJob {
+  id                      String                @id @default(cuid())
+  merchantId              String
+  customisationRevisionId String                @unique
+  proofAssetVersionId     String?               @unique
+  rendererVersion         String
+  status                  ProofJobStatus        @default(queued)
+  attempts                Int                   @default(0)
+  claimedAt               DateTime?
+  nextAttemptAt           DateTime              @default(now())
+  lastError               String?
+  createdAt               DateTime              @default(now())
+  updatedAt               DateTime              @updatedAt
+  merchant                Merchant              @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  customisationRevision   CustomisationRevision @relation(fields: [customisationRevisionId, merchantId], references: [id, merchantId], onDelete: Cascade)
+  proofAssetVersion       AssetVersion?         @relation("ProofArtifact", fields: [proofAssetVersionId, merchantId], references: [id, merchantId], onDelete: Restrict)
+
+  @@index([status, nextAttemptAt])
+  @@index([merchantId, status])
+  @@unique([customisationRevisionId, merchantId])
+  @@unique([proofAssetVersionId, merchantId])
 }
 
 model ExternalOrder {
@@ -526,12 +623,22 @@ model DeletionRequest {
   merchantId       String
   subjectType      String
   subjectId        String
-  status           String
+  status           DeletionRequestStatus @default(pending)
   liveDeletedAt    DateTime?
   backupExpiryNote String?
+  backupPurgedAt   DateTime?
+  completedAt      DateTime?
+  claimedAt        DateTime?
+  nextAttemptAt    DateTime              @default(now())
+  attempts         Int                   @default(0)
+  lastError        String?
+  eligibilityReason String?
+  executionPlan    Json?
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
   merchant         Merchant  @relation(fields: [merchantId], references: [id], onDelete: Cascade)
 
   @@index([merchantId, status])
+  @@index([status, nextAttemptAt])
+  @@index([merchantId, subjectType, subjectId])
 }

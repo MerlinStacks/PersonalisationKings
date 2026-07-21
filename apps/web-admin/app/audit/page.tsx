@@ -2,10 +2,12 @@ import { prisma } from "@personalise-kings/db";
 import { ResourceTable } from "../../components/resource-table";
 import { safeQuery } from "../../lib/data";
 import { formatDate } from "../../lib/format";
-import { getAdminSession } from "../../lib/session";
+import { requirePermission } from "../../lib/rbac";
 
 export default async function AuditPage() {
-  const session = await getAdminSession();
+  const access = await requirePermission("view_audit");
+  if (access.error) return <main className="page-shell"><p className="error-box">Your role cannot view audit events.</p></main>;
+  const session = access.session;
   const events = await safeQuery(() => prisma.auditEvent.findMany({
     where: { merchantId: session.merchantId },
     orderBy: { createdAt: "desc" },

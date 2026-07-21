@@ -18,6 +18,7 @@ export interface ConfigAsset {
 }
 
 export interface CustomiserConfig {
+  allowedParentOrigin: string;
   designName: string;
   scene: SceneGraph;
   rules: SceneCustomiserConfig;
@@ -47,6 +48,9 @@ export async function loadCustomiserConfig(
   if (!response.ok) throw new Error(apiError(body, "Unable to load this product design"));
 
   const design = record(body.design);
+  if (typeof body.parent_origin !== "string" || new URL(body.parent_origin).origin !== body.parent_origin) {
+    throw new Error("The product parent origin response is invalid");
+  }
   const parsedScene = sceneGraphSchema.safeParse(design?.scene_graph);
   const parsedRules = customiserConfigSchema.safeParse(design?.customiser_config);
   if (!design || typeof design.name !== "string" || !parsedScene.success || !parsedRules.success) {
@@ -70,6 +74,7 @@ export async function loadCustomiserConfig(
     throw new Error("The saved customisation response is invalid");
   }
   return {
+    allowedParentOrigin: body.parent_origin,
     designName: design.name,
     scene: parsedScene.data,
     rules: parsedRules.data,
@@ -160,8 +165,19 @@ export async function commitScene(
   return {
     customisationReference: body.customisation_reference,
     revision: positiveNumber(body.revision) ?? 1,
-    resumed: body.resumed === true
+    resumed: body.resumed === true,
+    previewUrl: safeHttpUrl(body.preview_url)
   };
+}
+
+function safeHttpUrl(value: unknown) {
+  if (typeof value !== "string") return undefined;
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:" ? value : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function customerInputs(scene: SceneGraph) {

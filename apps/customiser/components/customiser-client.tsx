@@ -5,7 +5,9 @@ import { SCENE_GRAPH_SCHEMA_VERSION, type CustomiserConfig, type SceneGraph } fr
 import { useEffect, useRef, useState, type ChangeEvent, type CSSProperties } from "react";
 import { commitScene, loadCustomiserConfig, uploadRaster, type ConfigAsset, type CustomiserInitialization as Initialization } from "../lib/customiser-api";
 import { imageQualityWarning, sceneSummary } from "../lib/scene-utils";
+import { createLiveArtworkSvg } from "../lib/live-artwork";
 import { ScenePreviewLayer } from "./scene-preview";
+import { SceneArtwork } from "./scene-artwork";
 
 interface CustomiserClientProps {
   parentOrigin: string;
@@ -107,6 +109,9 @@ export function CustomiserClient({ parentOrigin, correlationId }: Readonly<Custo
 
     void loadCustomiserConfig(initialization, correlationId, controller.signal)
       .then((config) => {
+        if (config.allowedParentOrigin !== parentOrigin) {
+          throw new Error("This customiser link is not authorized for the embedding shop.");
+        }
         setDesignName(config.designName);
         setScene(config.scene);
         setCustomiserConfig(config.rules);
@@ -128,6 +133,7 @@ export function CustomiserClient({ parentOrigin, correlationId }: Readonly<Custo
   const selectedLayer = scene?.layers.find((layer) => layer.id === selectedLayerId) ?? null;
   const selectedRule = customiserConfig?.layers.find((rule) => rule.layerId === selectedLayerId) ?? null;
   const editableLayers = scene?.layers.filter((layer) => customiserConfig?.layers.some((rule) => rule.layerId === layer.id)) ?? [];
+  const liveArtworkSvg = scene ? createLiveArtworkSvg(scene, assets) : null;
 
   function updateLayer(layerId: string, update: (layer: SceneLayer) => SceneLayer) {
     setScene((current) => current ? {
@@ -190,10 +196,11 @@ export function CustomiserClient({ parentOrigin, correlationId }: Readonly<Custo
         {scene ? (
           <div className="canvas-wrap">
             <div
-              className="print-area"
+              className={`print-area${liveArtworkSvg ? " artwork-backed" : ""}`}
               style={{ aspectRatio: `${scene.printArea.widthUm} / ${scene.printArea.heightUm}` }}
               aria-label={sceneSummary(scene)}
             >
+              {liveArtworkSvg ? <SceneArtwork svg={liveArtworkSvg} /> : null}
               {scene.layers.map((layer) => {
                 const rule = customiserConfig?.layers.find((candidate) => candidate.layerId === layer.id);
                 return (
@@ -412,7 +419,8 @@ async function commitCustomisation(
       event: "committed",
       payload: {
         customisation_reference: result.customisationReference,
-        summary: sceneSummary(scene)
+        summary: sceneSummary(scene),
+        preview_url: result.previewUrl
       },
       correlation_id: correlationId
     });

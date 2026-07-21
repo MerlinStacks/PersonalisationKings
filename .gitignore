@@ -10,3 +10,9 @@ coverage
 *.tsbuildinfo
 apps/**/generated
 packages/**/generated
+storage/
+.DS_Store
+test-results/
+playwright-report/
+sbom*.json
+*.spdx.json

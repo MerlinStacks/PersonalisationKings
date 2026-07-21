@@ -13,6 +13,7 @@
     "dev:api": "bun --filter @personalise-kings/api dev",
     "worker:maintenance": "bun --filter @personalise-kings/worker-maintenance dev",
     "worker:render": "bun --filter @personalise-kings/worker-render dev",
+    "worker:proof": "bun --filter @personalise-kings/worker-proof dev",
     "build": "bun run --filter '*' build",
     "typecheck": "bun run --filter '*' typecheck",
     "test": "bun run --filter '*' test",

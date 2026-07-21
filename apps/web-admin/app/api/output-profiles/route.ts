@@ -3,6 +3,7 @@ import * as z from "zod";
 import { created, ok, parseJson, toInputJson } from "../../../lib/api";
 import { writeAuditEvent } from "../../../lib/audit";
 import { requirePermission } from "../../../lib/rbac";
+import { requireSameOrigin } from "../../../lib/same-origin";
 
 const createOutputProfileSchema = z.object({
   name: z.string().min(1).max(160),
@@ -36,6 +37,8 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const originError = requireSameOrigin(request);
+  if (originError) return originError;
   const access = await requirePermission("manage_design");
   if (access.error) return access.error;
 

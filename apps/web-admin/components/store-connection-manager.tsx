@@ -12,6 +12,8 @@ interface StoreItem {
   credentialSource: string | null;
   credentialPermissions: string | null;
   credentialUpdatedAt: string | null;
+  activeSigningKeyId: string | null;
+  signingKeys: Array<{ keyId: string; createdAt: string; retiredAt: string | null; revokedAt: string | null }>;
   lastCheckedAt: string | null;
   lastSuccessfulAt: string | null;
   lastFailedAt: string | null;
@@ -25,6 +27,8 @@ interface ApiBody {
   authorizationUrl?: string;
   healthy?: boolean;
   message?: string;
+  keyId?: string;
+  secret?: string;
 }
 
 export function StoreConnectionManager({ stores, canManage, notice, noticeIsError = false }: Readonly<{
@@ -38,6 +42,7 @@ export function StoreConnectionManager({ stores, canManage, notice, noticeIsErro
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(noticeIsError ? notice ?? null : null);
   const [message, setMessage] = useState<string | null>(noticeIsError ? null : notice ?? null);
+  const [issuedCredential, setIssuedCredential] = useState<{ keyId: string; secret: string } | null>(null);
 
   async function startAuthorization(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -86,6 +91,37 @@ export function StoreConnectionManager({ stores, canManage, notice, noticeIsErro
     }
   }
 
+  async function rotateSigningKey(store: StoreItem) {
+    setBusyAction(`signing-${store.id}`);
+    clearFeedback();
+    setIssuedCredential(null);
+    try {
+      const body = await apiRequest(`/api/stores/${encodeURIComponent(store.id)}/signing-keys`, {});
+      if (!body.keyId || !body.secret) throw new Error("The signing credential response was incomplete");
+      setIssuedCredential({ keyId: body.keyId, secret: body.secret });
+      setMessage("Install this credential in WooCommerce before revoking the retired key. The secret is shown once.");
+      router.refresh();
+    } catch (caught) {
+      setError(errorMessage(caught, "Unable to rotate the connector signing key"));
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function revokeSigningKey(store: StoreItem, keyId: string) {
+    setBusyAction(`revoke-key-${keyId}`);
+    clearFeedback();
+    try {
+      await apiRequest(`/api/stores/${encodeURIComponent(store.id)}/signing-keys/${encodeURIComponent(keyId)}/revoke`, {});
+      setMessage(`Retired signing key ${keyId} was revoked.`);
+      router.refresh();
+    } catch (caught) {
+      setError(errorMessage(caught, "Unable to revoke the retired signing key"));
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
   function clearFeedback() {
     setError(null);
     setMessage(null);
@@ -95,6 +131,7 @@ export function StoreConnectionManager({ stores, canManage, notice, noticeIsErro
     <div className="store-manager">
       {message ? <p className="success-box" role="status">{message}</p> : null}
       {error ? <p className="error-box" role="alert">{error}</p> : null}
+      {issuedCredential ? <div className="credential-once" role="status"><strong>Signing key ID</strong><code>{issuedCredential.keyId}</code><strong>Signing secret</strong><code>{issuedCredential.secret}</code><button type="button" onClick={() => setIssuedCredential(null)}>I have stored this credential</button></div> : null}
 
       {canManage ? (
         <section className="store-connect-panel" aria-labelledby="connect-store-heading">
@@ -163,6 +200,7 @@ export function StoreConnectionManager({ stores, canManage, notice, noticeIsErro
                 <div><dt>Permission</dt><dd>{store.credentialPermissions ?? "Not available"}</dd></div>
                 <div><dt>Last healthy</dt><dd>{formatDate(store.lastSuccessfulAt)}</dd></div>
                 <div><dt>Last checked</dt><dd>{formatDate(store.lastCheckedAt)}</dd></div>
+                <div><dt>Connector signing</dt><dd>{store.activeSigningKeyId ?? "Not configured"}</dd></div>
               </dl>
               {store.lastError ? <p className="store-health-error"><strong>Latest check:</strong> {store.lastError}</p> : null}
 
@@ -186,7 +224,9 @@ export function StoreConnectionManager({ stores, canManage, notice, noticeIsErro
                       disabled={busyAction !== null || (!store.hasCredential && store.status === "revoked")}
                       onClick={() => void revoke(store)}
                     >{busyAction === `revoke-${store.id}` ? "Revoking..." : "Revoke"}</button>
+                    <button type="button" disabled={busyAction !== null} onClick={() => void rotateSigningKey(store)}>{busyAction === `signing-${store.id}` ? "Rotating..." : store.activeSigningKeyId ? "Rotate signing key" : "Create signing key"}</button>
                   </div>
+                  {store.signingKeys.some((key) => key.retiredAt && !key.revokedAt) ? <div className="retired-keys">{store.signingKeys.filter((key) => key.retiredAt && !key.revokedAt).map((key) => <button type="button" key={key.keyId} disabled={busyAction !== null} onClick={() => void revokeSigningKey(store, key.keyId)}>Revoke retired {key.keyId}</button>)}</div> : null}
                   <details className="manual-panel compact">
                     <summary>{store.hasCredential ? "Replace with REST API keys" : "Enter REST API keys"}</summary>
                     <p>Use a dedicated read-only key. A successful connection test is required before replacement.</p>

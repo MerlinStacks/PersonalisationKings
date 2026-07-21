@@ -24,6 +24,7 @@ afterEach(() => vi.unstubAllGlobals());
 describe("loadCustomiserConfig", () => {
   it("parses design-authored customiser rules", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => Response.json({
+      parent_origin: "https://shop.example",
       design: {
         name: "Test design",
         scene_graph: scene,
@@ -39,6 +40,7 @@ describe("loadCustomiserConfig", () => {
       new AbortController().signal
     );
     expect(result.designName).toBe("Test design");
+    expect(result.allowedParentOrigin).toBe("https://shop.example");
     expect(result.rules.layers[0]?.layerId).toBe("text-1");
   });
 
@@ -58,6 +60,7 @@ describe("loadCustomiserConfig", () => {
   it("requests and verifies a saved customisation revision", async () => {
     const reference = "pk_123e4567-e89b-42d3-a456-426614174000";
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => Response.json({
+      parent_origin: "https://shop.example",
       design: { name: "Test design", scene_graph: scene, customiser_config: defaultCustomiserConfig(scene) },
       resumed_customisation: { customisation_reference: reference, revision: 2 },
       assets: []

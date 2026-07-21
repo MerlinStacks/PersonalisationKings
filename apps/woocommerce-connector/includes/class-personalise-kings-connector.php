@@ -17,6 +17,7 @@ require_once PKC_PATH . 'includes/class-pkc-order-sync.php';
  */
 class Personalise_Kings_Connector {
     private static ?Personalise_Kings_Connector $instance = null;
+    private PKC_Frontend $frontend;
 
     /**
      * Get plugin instance.
@@ -35,7 +36,14 @@ class Personalise_Kings_Connector {
     private function __construct() {
         $outbox = new PKC_Outbox();
         new PKC_Settings( $outbox );
-        new PKC_Frontend();
+        $this->frontend = new PKC_Frontend();
         new PKC_Order_Sync( $outbox );
+    }
+
+    /**
+     * Render the customiser from a theme template.
+     */
+    public function render_customiser(): void {
+        $this->frontend->render_embed();
     }
 }

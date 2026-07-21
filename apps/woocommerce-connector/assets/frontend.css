@@ -1,0 +1,50 @@
+.pkc-customiser iframe {
+  width: 100%;
+  min-height: 640px;
+  border: 0;
+  border-radius: 16px;
+}
+
+.pkc-gallery-replacement {
+  float: left;
+  width: 48%;
+  margin-bottom: 2em;
+}
+
+.pkc-modal {
+  width: min(1100px, calc(100vw - 32px));
+  max-width: none;
+  max-height: calc(100vh - 32px);
+  padding: 40px 16px 16px;
+  border: 0;
+  border-radius: 16px;
+}
+
+.pkc-modal::backdrop {
+  background: rgb(0 0 0 / 70%);
+}
+
+.pkc-modal-close {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  border: 0;
+  background: transparent;
+  font-size: 28px;
+  cursor: pointer;
+}
+
+body.pkc-modal-open {
+  overflow: hidden;
+}
+
+@media (max-width: 768px) {
+  .pkc-gallery-replacement {
+    float: none;
+    width: 100%;
+  }
+
+  .pkc-customiser iframe {
+    min-height: 520px;
+  }
+}

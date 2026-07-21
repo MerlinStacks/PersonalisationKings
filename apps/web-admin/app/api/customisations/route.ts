@@ -24,7 +24,23 @@ export async function GET() {
     where: { merchantId: session.merchantId },
     orderBy: { updatedAt: "desc" },
     take: 50,
-    include: { revisions: { orderBy: { committedAt: "desc" }, take: 1 } }
+    include: {
+      revisions: {
+        orderBy: { committedAt: "desc" },
+        take: 1,
+        include: {
+          previewAssetVersion: {
+            select: { id: true, contentType: true, widthPx: true, heightPx: true, validationStatus: true, deletedAt: true }
+          },
+          proofJob: {
+            select: {
+              id: true, status: true, attempts: true, rendererVersion: true, lastError: true, updatedAt: true,
+              proofAssetVersion: { select: { id: true, contentType: true, widthPx: true, heightPx: true, validationStatus: true, deletedAt: true } }
+            }
+          }
+        }
+      }
+    }
   });
 
   return ok({ items: customisations });

@@ -450,12 +450,13 @@ class PKC_Order_Sync {
 
         $api_url = rtrim( (string) get_option( PKC_Settings::OPTION_API_URL, '' ), '/' );
         $store_id = $current_store_id;
-        $key_id = (string) get_option( PKC_Settings::OPTION_KEY_ID, '' );
-        $secret = (string) get_option( PKC_Settings::OPTION_SECRET, '' );
-        if ( '' === $api_url || '' === $store_id || '' === $key_id || '' === $secret ) {
+        $credential = PKC_Settings::signing_credential();
+        if ( '' === $api_url || '' === $store_id || ! $credential ) {
             $this->retry_outbox( $row, $claim_token, 'Connector credentials are incomplete.', null, true );
             return;
         }
+        $key_id = $credential['key_id'];
+        $secret = $credential['secret'];
 
         if ( empty( $row['payload_json'] ) ) {
             $payload = $this->build_payload( $order, $event_type, $event_key );
@@ -1071,8 +1072,7 @@ class PKC_Order_Sync {
     private function connector_is_configured(): bool {
         return '' !== (string) get_option( PKC_Settings::OPTION_API_URL, '' )
             && '' !== (string) get_option( PKC_Settings::OPTION_STORE_ID, '' )
-            && '' !== (string) get_option( PKC_Settings::OPTION_KEY_ID, '' )
-            && '' !== (string) get_option( PKC_Settings::OPTION_SECRET, '' );
+            && null !== PKC_Settings::signing_credential();
     }
 
     /**

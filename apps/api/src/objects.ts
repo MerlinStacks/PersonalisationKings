@@ -7,7 +7,12 @@ export async function handleObjectRequest(request: Request, url: URL, correlatio
     return Response.json({ error: "method_not_allowed", correlationId }, { status: 405 });
   }
 
-  const key = decodeURIComponent(url.pathname.replace(/^\/objects\//, ""));
+  let key: string;
+  try {
+    key = decodeURIComponent(url.pathname.replace(/^\/objects\//, ""));
+  } catch {
+    return Response.json({ error: "invalid_object_key", correlationId }, { status: 400 });
+  }
   const requestedMethod = url.searchParams.get("method");
   const expiresAt = Number(url.searchParams.get("expires") ?? 0);
   const signature = url.searchParams.get("signature") ?? "";
@@ -21,8 +26,25 @@ export async function handleObjectRequest(request: Request, url: URL, correlatio
   if (method === "PUT") {
     const contentType = request.headers.get("content-type") ?? "application/octet-stream";
     if (!request.body) return Response.json({ error: "empty_object", correlationId }, { status: 400 });
-    const metadata = await storage.putObject(key, request.body, contentType);
-    return Response.json({ ...metadata, correlationId });
+    const intent = await prisma.assetVersion.findFirst({
+      where: { objectKey: key, validationStatus: "pending", deletedAt: null },
+      select: { byteSize: true, contentType: true }
+    });
+    if (!intent) return Response.json({ error: "upload_intent_not_found", correlationId }, { status: 404 });
+    if (contentType !== intent.contentType) {
+      return Response.json({ error: "content_type_mismatch", correlationId }, { status: 415 });
+    }
+    const contentLength = request.headers.get("content-length");
+    if (contentLength !== null && (!/^\d+$/.test(contentLength) || BigInt(contentLength) > intent.byteSize)) {
+      return Response.json({ error: "object_too_large", correlationId }, { status: 413 });
+    }
+    try {
+      const metadata = await storage.putObject(key, limitStream(request.body, intent.byteSize), contentType);
+      return Response.json({ ...metadata, correlationId });
+    } catch (error) {
+      if (error instanceof RangeError) return Response.json({ error: "object_too_large", correlationId }, { status: 413 });
+      throw error;
+    }
   }
 
   const bytes = await storage.getObject(key);
@@ -40,4 +62,15 @@ export async function handleObjectRequest(request: Request, url: URL, correlatio
       "x-correlation-id": correlationId
     }
   });
+}
+
+function limitStream(source: ReadableStream<Uint8Array>, maximumBytes: bigint) {
+  let total = 0n;
+  return source.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      total += BigInt(chunk.byteLength);
+      if (total > maximumBytes) throw new RangeError("Object exceeds its approved upload size");
+      controller.enqueue(chunk);
+    }
+  }));
 }

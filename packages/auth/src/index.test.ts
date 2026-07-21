@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decryptConnectorSecret, encryptConnectorSecret, hashPassword, signAdminSession, signEmbedToken, verifyAdminSession, verifyEmbedToken, verifyPassword } from "./index";
+import { decryptConnectorSecret, decryptStoreWebhookSecret, decryptTotpSecret, encryptConnectorSecret, encryptStoreWebhookSecret, encryptTotpSecret, generateRecoveryCodes, generateSessionToken, hashPassword, hashRecoveryCode, hashSessionToken, normalizeRecoveryCode, roleCan, signEmbedToken, verifyEmbedToken, verifyPassword, verifyTotp } from "./index";
 
 describe("password hashing", () => {
   it("verifies the original password and rejects a different password", async () => {
@@ -10,32 +10,51 @@ describe("password hashing", () => {
   });
 });
 
-describe("admin session tokens", () => {
-  it("round-trips a valid signed session", () => {
-    const token = signAdminSession({
-      merchantId: "merchant-1",
-      userId: "user-1",
-      role: "owner_admin",
-      expiresAt: Math.floor(Date.now() / 1000) + 60
-    }, "secret");
+describe("staff permissions", () => {
+  it("allows owners and production operators to inspect order artwork", () => {
+    expect(roleCan("owner_admin", "view_order")).toBe(true);
+    expect(roleCan("owner_admin", "view_customisation")).toBe(true);
+    expect(roleCan("production_operator", "view_customisation")).toBe(true);
+  });
+});
 
-    expect(verifyAdminSession(token, "secret")?.merchantId).toBe("merchant-1");
+describe("database session and MFA primitives", () => {
+  it("generates opaque session tokens and deterministic hashes", () => {
+    const token = generateSessionToken();
+    expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(hashSessionToken(token)).toMatch(/^[0-9a-f]{64}$/);
+    expect(hashSessionToken(token)).toBe(hashSessionToken(token));
   });
 
-  it("rejects tampered sessions", () => {
-    const token = signAdminSession({
-      merchantId: "merchant-1",
-      userId: "user-1",
-      role: "owner_admin",
-      expiresAt: Math.floor(Date.now() / 1000) + 60
-    }, "secret");
-
-    expect(verifyAdminSession(`${token}tampered`, "secret")).toBeNull();
+  it("verifies RFC-compatible six-digit TOTP values and returns the replay step", () => {
+    const secret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+    expect(verifyTotp("287082", secret, 59_000, 0)).toBe(1n);
+    expect(verifyTotp("287082", secret, 90_000, 0)).toBeNull();
+    expect(verifyTotp("not-six", secret, 59_000, 0)).toBeNull();
   });
 
-  it("rejects malformed signed payloads without throwing", () => {
-    expect(verifyAdminSession("not-json.signature", "secret")).toBeNull();
-    expect(verifyAdminSession("a.b.c", "secret")).toBeNull();
+  it("encrypts TOTP secrets for one staff identity only", () => {
+    const key = Buffer.alloc(32, 7).toString("base64");
+    const encrypted = encryptTotpSecret("SECRET", key, "user-1");
+    expect(encrypted).not.toContain("SECRET");
+    expect(decryptTotpSecret(encrypted, key, "user-1")).toBe("SECRET");
+    expect(decryptTotpSecret(encrypted, key, "user-2")).toBeNull();
+  });
+
+  it("creates high-entropy normalizable recovery codes with peppered hashes", () => {
+    const codes = generateRecoveryCodes();
+    expect(new Set(codes).size).toBe(10);
+    expect(normalizeRecoveryCode(codes[0]!)).toMatch(/^[A-F0-9]{32}$/);
+    expect(hashRecoveryCode(codes[0]!, "pepper")).toBe(hashRecoveryCode(normalizeRecoveryCode(codes[0]!), "pepper"));
+  });
+
+  it("binds webhook secrets to one store and key while reading legacy ciphertext", () => {
+    const wrappingKey = Buffer.alloc(32, 9).toString("base64");
+    const encrypted = encryptStoreWebhookSecret("webhook-secret", wrappingKey, "store-1", "key-1");
+    expect(decryptStoreWebhookSecret(encrypted, wrappingKey, "store-1", "key-1")).toBe("webhook-secret");
+    expect(decryptStoreWebhookSecret(encrypted, wrappingKey, "store-1", "key-2")).toBeNull();
+    const legacy = encryptConnectorSecret("legacy-secret", wrappingKey);
+    expect(decryptStoreWebhookSecret(legacy, wrappingKey, "store-1", "legacy-key")).toBe("legacy-secret");
   });
 });
 

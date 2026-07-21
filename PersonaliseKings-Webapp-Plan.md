@@ -108,22 +108,46 @@
 - Added SSRF-resistant WooCommerce health requests with public DNS validation, address pinning, TLS hostname verification, redirect refusal, response timeouts, and a development-only private-store override that cannot weaken production.
 - Replaced the read-only Stores table with responsive native approval, manual fallback, health, re-authorization, and revocation controls without returning encrypted credential material to the browser.
 - Added automated coverage for WooCommerce URL normalization, private/reserved IP blocking, native authorization parameters, and encrypted credential round trips.
+- Added selectable WooCommerce placement adapters for classic hooks, mapped-product gallery replacement, a native modal, a dynamic block, shortcode, and manual theme rendering with duplicate-output protection.
+- Updated the WooCommerce connector scaffold to version 0.8.0 for product-template placement compatibility.
+- Added a deterministic shared SVG design engine that renders canonical physical-coordinate scenes with embedded tenant-owned fonts and raster assets, bounded output dimensions, print-area clipping, XML escaping, and reproducible transforms.
+- Added best-effort preview generation for every immutable customisation revision, stored as an accepted preview asset with checksum and dimensions and returned through a short-lived signed URL on commit.
+- Added revision preview relations and migration, audited tenant-scoped admin preview URL issuance, preview retention cleanup, and artwork-view permissions for owner/admin and production roles.
+- Added a separate Playwright proof worker with PostgreSQL-authoritative revision jobs, atomic claims, stale-worker recovery, capped exponential retries, blocked browser networking, bounded generated-SVG validation, and immutable PNG proof assets.
+- Added proof status to customisation/order APIs and audited tenant-scoped signed proof URL issuance for staff.
+- Pinned the proof worker to Playwright `1.61.1` and documented build-time Chromium plus Linux dependency installation so production workers never download browsers at runtime.
+- Replaced the live customiser's separate visual layer renderer with the shared canonical SVG output while preserving transparent pointer, touch, keyboard, focus, and selection overlays plus a missing-asset fallback.
+- Added cross-pipeline geometric fixtures covering physical view boxes, clipping, edge placement, layer order, multiline text, image fit, opacity, transforms, source-type safety, and proof-record dimension matching.
+- Added byte-counted streaming JSON limits with 413/415 responses, bounded per-process API rate limiting, upload intent size/type enforcement at PUT and promotion, malformed object-key handling, and production fail-closed object URL signing.
+- Added nonce-based CSP and browser security policies for the admin and customiser, dynamic exact-origin `frame-ancestors`, token-to-parent-origin binding, a sandboxed/permission-restricted WooCommerce iframe, and the remaining same-origin checks on privileged admin actions.
+- Updated the WooCommerce connector scaffold to version 0.9.0 for iframe isolation and referrer/feature restrictions.
+- Added executable customer-upload deletion requests with constrained lifecycle states, atomic worker claims, exact JSON reference discovery, ordered/design usage blocking, persisted retry plans, monotonic live-storage deletion, derivative/session metadata erasure, and audit summaries.
+- Added admin controls to queue upload assets or versions, recheck blocked/failed requests, distinguish live deletion from backup completion, and record explicit backup-purge evidence.
+- Added a serializable commit-time asset recheck so a concurrent deletion cannot be followed by a new immutable revision using the erased upload.
+- Replaced stateless admin cookies with opaque, SHA-256-hashed PostgreSQL sessions supporting pending MFA state, token rotation on elevation, server-side revocation, bounded device metadata, expiry cleanup, and self-service session revocation.
+- Added mandatory authenticator-app TOTP enrollment with AES-256-GCM purpose-bound secret encryption, atomic time-step replay prevention, ten high-entropy one-time recovery codes stored as peppered hashes, and dedicated enrollment/verification UI.
+- Removed arbitrary MFA flag changes from staff administration, revoke sessions on role changes, protect the final owner/admin, and hide development seed credentials in production.
+- Added versioned per-store connector signing keys with active, retired-overlap, and revoked states; store/key-bound authenticated encryption; one-time rotation secrets; tenant-scoped rotation/revocation APIs; full-store key revocation; and legacy-key migration.
+- Replaced torn WooCommerce key/secret options with one non-autoloaded atomic credential bundle while preserving late-bound outbox signing so existing durable events automatically use the newly installed key.
+- Updated the WooCommerce connector scaffold to version 0.10.0 and removed the remaining production embed-token development-secret fallback.
+- Added a PostgreSQL-backed GitHub Actions correctness gate covering frozen dependency installation, Prisma generation/validation, clean-database migration deployment, Compose validation, connector syntax, workspace typechecks/tests, and production builds.
+- Added SHA-pinned dependency review, Bun vulnerability auditing, full-history secret scanning, Trivy configuration scanning, SPDX JSON SBOM generation, weekly GitHub Actions updates, and a documented runtime/update/exception policy.
 
 ### Still To Do
 
 - Confirm Phase 0 production details: exact printer model, RIP product/version, accepted PDF format, plate names, mask policies, print order, overprint/knockout behaviour, colour management, and dimensional tolerances.
 - Build and physically validate the Phase 0 production exporter fixtures before claiming UV print-file readiness.
 - Replace placeholder/demo output profile settings with confirmed printer/RIP values after Phase 0.
-- Add MFA/passkeys, secure account recovery, and expanded session-management controls.
+- Add WebAuthn passkeys and verified forgotten-password/support recovery; TOTP MFA, one-time recovery codes, and revocable database sessions are now implemented.
 - Replace remaining dev secrets and demo defaults with configured production secrets.
 - Expand RBAC enforcement and audit coverage for downloads, regeneration, manual status changes, connection changes, and every privileged action.
-- Add tested WooCommerce placement adapters for block templates, classic hooks, gallery replacement, modal/full-screen fallback, shortcode, and manual placement.
+- Complete live theme/browser compatibility testing for the WooCommerce block, classic-hook, gallery-replacement, modal, shortcode, and manual placement adapters.
 - Complete full touch workflow and browser accessibility testing for the constrained customiser.
-- Add preview generation and proof screenshot generation.
+- Add pinned Chromium golden-image comparisons for the PNG proof and later production output; geometric live-preview/proof fixtures are now covered.
 - Add visual/geometric fixture tests comparing preview/proof/production output.
 - Expand media upload validation with full decoder limits, metadata stripping, safe re-encoding, and isolated processing.
 - Add malware scanning or equivalent isolated media processing where required.
-- Complete customer upload deletion and erasure execution across live storage, metadata, replicas, and backup-expiry notes.
+- Extend erasure to ordered artwork only after retention eligibility is modelled, and integrate external replica/backup systems with automatic purge evidence; unordered live storage and metadata execution is now implemented.
 - Extend cleanup jobs beyond temporary uploads to previews and generated files.
 - Add later S3-compatible object-storage backend support.
 - Apply and test the initial PostgreSQL migration against a real local database when Docker or PostgreSQL is available.
@@ -135,10 +159,10 @@
 - Add generated artifact creation from the real production exporter after Phase 0.
 - Expand failed print job review workflows and production operator controls beyond the current regeneration endpoint.
 - Add OpenTelemetry tracing/metrics/log correlation across connector, API, inbox, outbox, workers, artifacts, and admin views.
-- Add rate limiting, body-size limits, security headers, CSP, iframe `frame-ancestors`, sandboxing, and Permissions Policy.
-- Add connector key ID lookup and secret rotation for HMAC verification.
+- Replace the bounded per-process API limiter with coordinated Redis/edge limits after trusted-proxy topology is configured, and complete browser CSP/sandbox compatibility tests.
+- Add wrapping-key versioning and re-encryption tooling for `PK_CONNECTOR_SECRET_ENCRYPTION_KEY`; per-store HMAC key lookup, overlap rotation, and revocation are now implemented.
 - Expand automated tests for tenant isolation, connector signatures, duplicate events, customiser commit validation, order ingestion, print job creation, upload validation edge cases, and WooCommerce cart/order behaviour.
-- Add CI, dependency scanning, secret scanning, SBOM generation, container scanning, and update policy automation.
+- Add production Dockerfiles, then enforce digest-pinned base images, image vulnerability scanning, and release-attached SBOMs; repository CI, dependency/secret/configuration scanning, source SBOM generation, and update policy automation are implemented.
 - Add production deployment configuration, reverse proxy guidance, cache coordination, and persistent storage configuration.
 - Add accessibility testing against WCAG 2.2 AA for admin and customiser.
 - Add private beta operational runbooks, failure simulations, monitoring, and load tests.
@@ -403,6 +427,8 @@ The render spec can use JSON/JSONB fields, but key searchable business records s
 Use current stable dependency versions at project creation time, not outdated versions and not unstable pre-release versions unless there is a specific reason.
 
 Dependencies should be pinned through lockfiles and updated deliberately.
+
+The executable policy, runtime baseline, exception process, and mandatory CI/security checks are documented in `docs/DEPENDENCY_POLICY.md`. GitHub Actions are pinned to immutable commits and updated through reviewed weekly pull requests.
 
 Policy:
 

@@ -2,7 +2,7 @@
 /**
  * Plugin Name: PersonaliseKings Connector
  * Description: Thin WooCommerce connector for the PersonaliseKings hosted customiser and order sync.
- * Version:     0.7.0
+ * Version:     0.10.0
  * Requires at least: 6.4
  * Requires PHP: 8.1
  * Author:      PersonaliseKings
@@ -16,7 +16,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'PKC_VERSION', '0.7.0' );
+define( 'PKC_VERSION', '0.10.0' );
 define( 'PKC_DB_VERSION', '1.3.0' );
 define( 'PKC_PATH', plugin_dir_path( __FILE__ ) );
 define( 'PKC_URL', plugin_dir_url( __FILE__ ) );
@@ -49,6 +49,15 @@ add_action(
         }
     }
 );
+
+/**
+ * Render the customiser from a WooCommerce product template.
+ */
+function personalise_kings_render_customiser(): void {
+    if ( class_exists( 'Personalise_Kings_Connector' ) ) {
+        Personalise_Kings_Connector::instance()->render_customiser();
+    }
+}
 
 add_action(
     'plugins_loaded',

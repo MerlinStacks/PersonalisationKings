@@ -3,6 +3,7 @@ import * as z from "zod";
 import { badRequest, created, parseJson, toInputJson } from "../../../../../lib/api";
 import { writeAuditEvent } from "../../../../../lib/audit";
 import { requirePermission } from "../../../../../lib/rbac";
+import { requireSameOrigin } from "../../../../../lib/same-origin";
 
 const createVersionSchema = z.object({
   printerModel: z.string().min(1),
@@ -22,6 +23,8 @@ const createVersionSchema = z.object({
 });
 
 export async function POST(request: Request, { params }: Readonly<{ params: Promise<{ outputProfileId: string }> }>) {
+  const originError = requireSameOrigin(request);
+  if (originError) return originError;
   const access = await requirePermission("manage_design");
   if (access.error) return access.error;
 

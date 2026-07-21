@@ -11,12 +11,22 @@ defined( 'ABSPATH' ) || exit;
  * Adds a hosted customiser placeholder to product pages.
  */
 class PKC_Frontend {
+    private bool $rendered = false;
+
     /**
      * Constructor.
      */
     public function __construct() {
         add_action( 'wp_enqueue_scripts', array( $this, 'enqueue_assets' ) );
-        add_action( 'woocommerce_before_add_to_cart_button', array( $this, 'render_embed' ), 15 );
+        add_action( 'init', array( $this, 'register_block_and_shortcode' ) );
+        $placement = (string) get_option( PKC_Settings::OPTION_PLACEMENT, 'classic' );
+        if ( 'gallery' === $placement ) {
+            add_action( 'woocommerce_before_single_product_summary', array( $this, 'render_gallery_embed' ), 19 );
+        } elseif ( 'modal' === $placement ) {
+            add_action( 'woocommerce_before_add_to_cart_button', array( $this, 'render_modal_embed' ), 15 );
+        } elseif ( 'manual' !== $placement ) {
+            add_action( 'woocommerce_before_add_to_cart_button', array( $this, 'render_embed' ), 15 );
+        }
         add_filter( 'woocommerce_add_to_cart_validation', array( $this, 'validate_add_to_cart' ), 10, 5 );
         add_filter( 'woocommerce_add_cart_item_data', array( $this, 'add_cart_item_data' ), 10, 4 );
         add_filter( 'woocommerce_get_item_data', array( $this, 'display_cart_item_data' ), 10, 2 );
@@ -38,15 +48,82 @@ class PKC_Frontend {
         }
 
         wp_enqueue_script( 'pkc-frontend', PKC_URL . 'assets/frontend.js', array(), PKC_VERSION, true );
+        wp_enqueue_style( 'pkc-frontend', PKC_URL . 'assets/frontend.css', array(), PKC_VERSION );
+    }
+
+    /**
+     * Register template-controlled placement adapters.
+     */
+    public function register_block_and_shortcode(): void {
+        add_shortcode( 'personalise_kings_customiser', array( $this, 'render_shortcode' ) );
+        wp_register_script(
+            'pkc-customiser-block',
+            PKC_URL . 'assets/block.js',
+            array( 'wp-blocks', 'wp-element', 'wp-i18n', 'wp-server-side-render' ),
+            PKC_VERSION,
+            true
+        );
+        register_block_type(
+            'personalise-kings/customiser',
+            array(
+                'api_version'     => 3,
+                'editor_script'   => 'pkc-customiser-block',
+                'render_callback' => array( $this, 'render_block' ),
+            )
+        );
+    }
+
+    /**
+     * Render the dynamic product-template block.
+     */
+    public function render_block(): string {
+        return $this->capture_embed();
+    }
+
+    /**
+     * Render the product-template shortcode.
+     */
+    public function render_shortcode(): string {
+        return $this->capture_embed();
+    }
+
+    /**
+     * Return embed markup for template adapters.
+     */
+    private function capture_embed(): string {
+        ob_start();
+        $this->render_embed();
+        return (string) ob_get_clean();
+    }
+
+    /**
+     * Replace the standard gallery when this product has a usable mapping.
+     */
+    public function render_gallery_embed(): void {
+        ob_start();
+        $this->render_embed( 'gallery' );
+        $markup = (string) ob_get_clean();
+        if ( '' === $markup ) {
+            return;
+        }
+        remove_action( 'woocommerce_before_single_product_summary', 'woocommerce_show_product_images', 20 );
+        echo $markup; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Built and escaped by render_embed().
+    }
+
+    /**
+     * Render the customiser in a native modal dialog.
+     */
+    public function render_modal_embed(): void {
+        $this->render_embed( 'modal' );
     }
 
     /**
      * Render iframe container.
      */
-    public function render_embed(): void {
+    public function render_embed( string $presentation = 'inline' ): void {
         global $product;
 
-        if ( ! $product instanceof WC_Product ) {
+        if ( $this->rendered || ! $product instanceof WC_Product ) {
             return;
         }
 
@@ -87,7 +164,14 @@ class PKC_Frontend {
             $webapp_url . '/'
         );
 
-        echo '<div class="pkc-customiser" data-pkc-customiser data-customiser-origin="' . esc_attr( $customiser_origin ) . '" data-correlation-id="' . esc_attr( $correlation_id ) . '" data-api-url="' . esc_attr( $api_url ) . '" data-embed-token="' . esc_attr( $embed_token ) . '" data-product-id="' . esc_attr( (string) $product->get_id() ) . '" data-price-modifier-minor="' . esc_attr( (string) $price_modifier_minor ) . '" data-ajax-url="' . esc_url( admin_url( 'admin-ajax.php' ) ) . '" data-ajax-nonce="' . esc_attr( wp_create_nonce( 'pkc_refresh_embed_token' ) ) . '" data-edit-reference="' . esc_attr( $edit_reference ) . '" data-edit-cart-key="' . esc_attr( $edit_cart_key ) . '" data-edit-variant="' . esc_attr( $initial_variant_id ) . '" data-edit-nonce="' . esc_attr( $edit_nonce ) . '"><iframe data-pkc-iframe title="' . esc_attr__( 'Personalise this product', 'personalise-kings-connector' ) . '" src="' . esc_url( $iframe_url ) . '" loading="lazy" style="width:100%;min-height:640px;border:0;border-radius:16px;"></iframe><input type="hidden" name="pk_customisation_reference" value="' . esc_attr( $edit_reference ) . '" /><p data-pkc-price-adjustment' . ( 0 === $price_modifier_minor ? ' hidden' : '' ) . '>' . wp_kses_post( $price_modifier_display ) . '</p><p data-pkc-status role="status" aria-live="polite" hidden></p></div>';
+        $this->rendered = true;
+        $embed_markup = '<div class="pkc-customiser" data-pkc-customiser data-customiser-origin="' . esc_attr( $customiser_origin ) . '" data-correlation-id="' . esc_attr( $correlation_id ) . '" data-api-url="' . esc_attr( $api_url ) . '" data-embed-token="' . esc_attr( $embed_token ) . '" data-product-id="' . esc_attr( (string) $product->get_id() ) . '" data-price-modifier-minor="' . esc_attr( (string) $price_modifier_minor ) . '" data-ajax-url="' . esc_url( admin_url( 'admin-ajax.php' ) ) . '" data-ajax-nonce="' . esc_attr( wp_create_nonce( 'pkc_refresh_embed_token' ) ) . '" data-edit-reference="' . esc_attr( $edit_reference ) . '" data-edit-cart-key="' . esc_attr( $edit_cart_key ) . '" data-edit-variant="' . esc_attr( $initial_variant_id ) . '" data-edit-nonce="' . esc_attr( $edit_nonce ) . '"><iframe data-pkc-iframe title="' . esc_attr__( 'Personalise this product', 'personalise-kings-connector' ) . '" src="' . esc_url( $iframe_url ) . '" loading="lazy" sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer" allow="camera \'none\'; microphone \'none\'; geolocation \'none\'; payment \'none\'"></iframe><input type="hidden" name="pk_customisation_reference" value="' . esc_attr( $edit_reference ) . '" /><p data-pkc-price-adjustment' . ( 0 === $price_modifier_minor ? ' hidden' : '' ) . '>' . wp_kses_post( $price_modifier_display ) . '</p><p data-pkc-status role="status" aria-live="polite" hidden></p></div>';
+        if ( 'modal' === $presentation ) {
+            echo '<button type="button" class="button alt pkc-modal-open" data-pkc-modal-open>' . esc_html__( 'Personalise this product', 'personalise-kings-connector' ) . '</button><dialog class="pkc-modal" data-pkc-modal><button type="button" class="pkc-modal-close" data-pkc-modal-close aria-label="' . esc_attr__( 'Close customiser', 'personalise-kings-connector' ) . '">&times;</button>' . $embed_markup . '</dialog>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Every dynamic value is escaped above.
+            return;
+        }
+        $class = 'gallery' === $presentation ? 'pkc-gallery-replacement' : 'pkc-inline-placement';
+        echo '<div class="' . esc_attr( $class ) . '">' . $embed_markup . '</div>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Every dynamic value is escaped above.
     }
 
     /**
@@ -117,11 +201,12 @@ class PKC_Frontend {
             return null;
         }
 
-        $key_id = (string) get_option( PKC_Settings::OPTION_KEY_ID, '' );
-        $secret = (string) get_option( PKC_Settings::OPTION_SECRET, '' );
-        if ( '' === $key_id || '' === $secret ) {
+        $credential = PKC_Settings::signing_credential();
+        if ( ! $credential ) {
             return null;
         }
+        $key_id = $credential['key_id'];
+        $secret = $credential['secret'];
 
         $response = wp_remote_post(
             $api_url . '/v1/customiser/embed-token',
@@ -195,11 +280,12 @@ class PKC_Frontend {
                 )
             )
         );
-        $key_id = (string) get_option( PKC_Settings::OPTION_KEY_ID, '' );
-        $secret = (string) get_option( PKC_Settings::OPTION_SECRET, '' );
-        if ( ! is_string( $body ) || '' === $key_id || '' === $secret ) {
+        $credential = PKC_Settings::signing_credential();
+        if ( ! is_string( $body ) || ! $credential ) {
             return null;
         }
+        $key_id = $credential['key_id'];
+        $secret = $credential['secret'];
 
         $response = wp_remote_post(
             $api_url . '/v1/customiser/mapping-lookup',

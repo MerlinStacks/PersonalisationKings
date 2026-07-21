@@ -34,7 +34,7 @@ export default async function StaffPage() {
         <div>
           <p className="eyebrow">Access control</p>
           <h1>Staff</h1>
-          <p>Basic MVP staff roles are available now. Full team administration, MFA setup, and recovery flows still need hardening.</p>
+          <p>Staff enroll mandatory authenticator MFA on first login and receive one-time recovery codes. Role changes revoke active sessions; passkeys and verified forgotten-password recovery remain future work.</p>
         </div>
       </header>
       <ResourceTable
