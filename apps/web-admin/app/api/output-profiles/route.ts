@@ -72,20 +72,20 @@ export async function POST(request: Request) {
       }
     });
 
-    return tx.outputProfile.update({
+    const activeProfile = await tx.outputProfile.update({
       where: { id: outputProfile.id },
       data: { activeVersionId: version.id },
       include: { versions: true }
     });
-  });
-
-  await writeAuditEvent({
-    merchantId: access.session.merchantId,
-    actorUserId: access.session.userId,
-    action: "output_profile.create",
-    targetType: "OutputProfile",
-    targetId: profile.id,
-    metadata: { activeVersionId: profile.activeVersionId }
+    await writeAuditEvent({
+      merchantId: access.session.merchantId,
+      actorUserId: access.session.userId,
+      action: "output_profile.create",
+      targetType: "OutputProfile",
+      targetId: activeProfile.id,
+      metadata: { activeVersionId: activeProfile.activeVersionId }
+    }, tx);
+    return activeProfile;
   });
 
   return created(profile);

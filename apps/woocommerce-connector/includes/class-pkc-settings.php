@@ -55,8 +55,8 @@ class PKC_Settings {
      * Register options.
      */
     public function register_settings(): void {
-        register_setting( 'pkc_settings', self::OPTION_WEBAPP_URL, array( 'sanitize_callback' => 'esc_url_raw' ) );
-        register_setting( 'pkc_settings', self::OPTION_API_URL, array( 'sanitize_callback' => 'esc_url_raw' ) );
+        register_setting( 'pkc_settings', self::OPTION_WEBAPP_URL, array( 'sanitize_callback' => array( $this, 'sanitize_webapp_url' ) ) );
+        register_setting( 'pkc_settings', self::OPTION_API_URL, array( 'sanitize_callback' => array( $this, 'sanitize_api_url' ) ) );
         register_setting( 'pkc_settings', self::OPTION_STORE_ID, array( 'sanitize_callback' => 'sanitize_text_field' ) );
         register_setting( 'pkc_settings', self::OPTION_CREDENTIAL, array( 'sanitize_callback' => array( $this, 'sanitize_signing_credential' ) ) );
         register_setting(
@@ -92,8 +92,8 @@ class PKC_Settings {
             <form method="post" action="options.php">
                 <?php settings_fields( 'pkc_settings' ); ?>
                 <table class="form-table" role="presentation">
-                    <?php $this->render_input( self::OPTION_WEBAPP_URL, __( 'Customiser webapp URL', 'personalise-kings-connector' ), 'http://localhost:3001' ); ?>
-                    <?php $this->render_input( self::OPTION_API_URL, __( 'Connector API URL', 'personalise-kings-connector' ), 'http://localhost:3002' ); ?>
+                    <?php $this->render_input( self::OPTION_WEBAPP_URL, __( 'Customiser webapp URL', 'personalise-kings-connector' ), 'https://customiser.example.com' ); ?>
+                    <?php $this->render_input( self::OPTION_API_URL, __( 'Connector API URL', 'personalise-kings-connector' ), 'https://api.example.com' ); ?>
                     <?php $this->render_input( self::OPTION_STORE_ID, __( 'PersonaliseKings store ID', 'personalise-kings-connector' ), '' ); ?>
                     <?php $credential = self::signing_credential(); ?>
                     <tr><th scope="row"><?php echo esc_html__( 'Active signing key', 'personalise-kings-connector' ); ?></th><td><code><?php echo esc_html( $credential['key_id'] ?? __( 'Not configured', 'personalise-kings-connector' ) ); ?></code></td></tr>
@@ -236,12 +236,14 @@ class PKC_Settings {
     public static function signing_credential(): ?array {
         $credential = get_option( self::OPTION_CREDENTIAL, null );
         if ( is_array( $credential ) && ! empty( $credential['key_id'] ) && ! empty( $credential['secret'] ) ) {
-            return array( 'key_id' => (string) $credential['key_id'], 'secret' => (string) $credential['secret'] );
+            $credential = array( 'key_id' => (string) $credential['key_id'], 'secret' => (string) $credential['secret'] );
+            return self::is_valid_stored_credential( $credential ) ? $credential : null;
         }
         $key_id = (string) get_option( self::OPTION_KEY_ID, '' );
         $secret = (string) get_option( self::OPTION_SECRET, '' );
         if ( '' === $key_id || '' === $secret ) return null;
         $credential = array( 'key_id' => $key_id, 'secret' => $secret );
+        if ( ! self::is_valid_stored_credential( $credential ) ) return null;
         add_option( self::OPTION_CREDENTIAL, $credential, '', false );
         return $credential;
     }
@@ -258,7 +260,78 @@ class PKC_Settings {
         $key_id = isset( $value['key_id'] ) ? sanitize_text_field( (string) $value['key_id'] ) : '';
         $secret = isset( $value['secret'] ) ? sanitize_text_field( (string) $value['secret'] ) : '';
         if ( '' === $key_id || '' === $secret ) return $current;
+        if ( ! preg_match( '/^pk_[A-Za-z0-9_-]{22}$/', $key_id ) || ! preg_match( '/^[A-Za-z0-9_-]{43}$/', $secret ) ) {
+            add_settings_error(
+                self::OPTION_CREDENTIAL,
+                'pkc_invalid_signing_credential',
+                __( 'The replacement signing credential is not in the format issued by PersonaliseKings.', 'personalise-kings-connector' )
+            );
+            return $current;
+        }
         return array( 'key_id' => $key_id, 'secret' => $secret );
+    }
+
+    /**
+     * Validate the hosted customiser base URL.
+     *
+     * @param mixed $value Submitted URL.
+     */
+    public function sanitize_webapp_url( $value ): string {
+        return $this->sanitize_endpoint_url( $value, self::OPTION_WEBAPP_URL );
+    }
+
+    /**
+     * Validate the connector API base URL.
+     *
+     * @param mixed $value Submitted URL.
+     */
+    public function sanitize_api_url( $value ): string {
+        return $this->sanitize_endpoint_url( $value, self::OPTION_API_URL );
+    }
+
+    /**
+     * Validate a configured connector endpoint before every outbound request.
+     */
+    public static function is_valid_endpoint_url( string $url ): bool {
+        $parts = wp_parse_url( $url );
+        $local_environment = in_array( wp_get_environment_type(), array( 'local', 'development' ), true );
+        $local_http = $local_environment && is_array( $parts ) && 'http' === ( $parts['scheme'] ?? '' )
+            && in_array( strtolower( (string) ( $parts['host'] ?? '' ) ), array( 'localhost', '127.0.0.1', '::1' ), true );
+        return is_array( $parts ) && ! empty( $parts['host'] )
+            && ( 'https' === ( $parts['scheme'] ?? '' ) || $local_http )
+            && empty( $parts['user'] ) && empty( $parts['pass'] ) && empty( $parts['query'] ) && empty( $parts['fragment'] )
+            && ( empty( $parts['path'] ) || '/' === $parts['path'] )
+            && ( $local_http || false !== wp_http_validate_url( $url ) );
+    }
+
+    /**
+     * Require an exact HTTPS base origin, with localhost HTTP limited to local development.
+     *
+     * @param mixed  $value  Submitted URL.
+     * @param string $option Option being updated.
+     */
+    private function sanitize_endpoint_url( $value, string $option ): string {
+        $current = (string) get_option( $option, '' );
+        $url = esc_url_raw( trim( (string) $value ), array( 'http', 'https' ) );
+        if ( ! self::is_valid_endpoint_url( $url ) ) {
+            add_settings_error(
+                $option,
+                'pkc_invalid_endpoint_url',
+                __( 'Connector endpoints must be public HTTPS base origins without credentials, paths, queries, fragments, or redirects.', 'personalise-kings-connector' )
+            );
+            return $current;
+        }
+        return untrailingslashit( $url );
+    }
+
+    /**
+     * Accept migrated key IDs while requiring a non-trivial secret and bounded identifier.
+     *
+     * @param array{key_id:string,secret:string} $credential Stored credential.
+     */
+    private static function is_valid_stored_credential( array $credential ): bool {
+        return (bool) preg_match( '/^[A-Za-z0-9_-]{1,128}$/', $credential['key_id'] )
+            && strlen( $credential['secret'] ) >= 32 && strlen( $credential['secret'] ) <= 512;
     }
 
     /**

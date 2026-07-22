@@ -40,40 +40,41 @@ export async function POST(request: Request, { params }: Readonly<{ params: Prom
   if (!profile) return badRequest("Output profile not found");
 
   const versionNumber = (profile.versions[0]?.version ?? 0) + 1;
-  const version = await prisma.outputProfileVersion.create({
-    data: {
+  const version = await prisma.$transaction(async (tx) => {
+    const createdVersion = await tx.outputProfileVersion.create({
+      data: {
+        merchantId: access.session.merchantId,
+        outputProfileId,
+        version: versionNumber,
+        printerModel: parsed.data.printerModel,
+        ripName: parsed.data.ripName,
+        ripVersion: parsed.data.ripVersion,
+        widthUm: parsed.data.widthUm,
+        heightUm: parsed.data.heightUm,
+        bleedUm: parsed.data.bleedUm,
+        processColourSpace: parsed.data.processColourSpace,
+        whiteSpotName: parsed.data.whiteSpotName,
+        glossSpotName: parsed.data.glossSpotName,
+        inkSequence: toInputJson(parsed.data.inkSequence),
+        overprintPolicy: toInputJson(parsed.data.overprintPolicy),
+        whiteMaskPolicy: toInputJson(parsed.data.whiteMaskPolicy),
+        glossMaskPolicy: toInputJson(parsed.data.glossMaskPolicy),
+        preflightRuleVersion: parsed.data.preflightRuleVersion
+      }
+    });
+    await tx.outputProfile.update({
+      where: { id: outputProfileId },
+      data: { activeVersionId: createdVersion.id }
+    });
+    await writeAuditEvent({
       merchantId: access.session.merchantId,
-      outputProfileId,
-      version: versionNumber,
-      printerModel: parsed.data.printerModel,
-      ripName: parsed.data.ripName,
-      ripVersion: parsed.data.ripVersion,
-      widthUm: parsed.data.widthUm,
-      heightUm: parsed.data.heightUm,
-      bleedUm: parsed.data.bleedUm,
-      processColourSpace: parsed.data.processColourSpace,
-      whiteSpotName: parsed.data.whiteSpotName,
-      glossSpotName: parsed.data.glossSpotName,
-      inkSequence: toInputJson(parsed.data.inkSequence),
-      overprintPolicy: toInputJson(parsed.data.overprintPolicy),
-      whiteMaskPolicy: toInputJson(parsed.data.whiteMaskPolicy),
-      glossMaskPolicy: toInputJson(parsed.data.glossMaskPolicy),
-      preflightRuleVersion: parsed.data.preflightRuleVersion
-    }
-  });
-
-  await prisma.outputProfile.update({
-    where: { id: outputProfileId },
-    data: { activeVersionId: version.id }
-  });
-
-  await writeAuditEvent({
-    merchantId: access.session.merchantId,
-    actorUserId: access.session.userId,
-    action: "output_profile.version_create",
-    targetType: "OutputProfileVersion",
-    targetId: version.id,
-    metadata: { outputProfileId, version: version.version }
+      actorUserId: access.session.userId,
+      action: "output_profile.version_create",
+      targetType: "OutputProfileVersion",
+      targetId: createdVersion.id,
+      metadata: { outputProfileId, version: createdVersion.version }
+    }, tx);
+    return createdVersion;
   });
 
   return created(version);

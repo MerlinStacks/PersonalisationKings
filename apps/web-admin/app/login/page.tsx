@@ -9,7 +9,7 @@ export default async function LoginPage({ searchParams }: Readonly<{
 
   const params = await searchParams;
   const hasError = params.error === "invalid";
-  const development = process.env.NODE_ENV !== "production";
+  const development = process.env.NODE_ENV === "development" && process.env.PK_ALLOW_DEMO_SEED === "true";
 
   return (
     <main className="login-shell">

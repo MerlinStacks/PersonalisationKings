@@ -1,6 +1,8 @@
 import { prisma } from "@personalise-kings/db";
 import { orderSyncPayloadSchema } from "@personalise-kings/connector-contracts";
+import { addCounter } from "@personalise-kings/observability/telemetry";
 import { badRequest, created, ok, parseJson, toInputJson } from "../../../lib/api";
+import { writeAuditEvent } from "../../../lib/audit";
 import { requirePermission } from "../../../lib/rbac";
 import { requireSameOrigin } from "../../../lib/same-origin";
 
@@ -99,9 +101,18 @@ export async function POST(request: Request) {
         correlationId: parsed.data.idempotency_key
       }
     });
+    await writeAuditEvent({
+      merchantId: session.merchantId,
+      actorUserId: session.userId,
+      action: "order.admin_sync",
+      targetType: "ExternalOrder",
+      targetId: externalOrder.id,
+      metadata: { storeId: store.id, lineItemCount: parsed.data.line_items.length, status: parsed.data.order_status }
+    }, tx);
 
     return externalOrder;
   });
+  addCounter("pk.outbox.events.created", 1, { event_type: "order.synced", producer: "admin_order" });
 
   return created(order);
 }

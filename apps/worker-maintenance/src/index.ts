@@ -1,10 +1,19 @@
 import { prisma } from "@personalise-kings/db";
+import { validateServiceEnvironment } from "@personalise-kings/config/server";
 import { createObjectStorageFromEnv } from "@personalise-kings/storage";
 import { processNextDeletionRequest } from "./deletion";
+import { reconcileQueues } from "./reconciliation";
+import { cleanupExpiredGeneratedArtifacts } from "./artifact-cleanup";
+import { runOperationalChecks } from "./operational-checks";
+import { processOperationalAlertDeliveries } from "./alert-delivery";
+import { logEvent, serializeError } from "@personalise-kings/observability";
+import { addCounter, initializeTelemetry, recordHistogram, shutdownTelemetry, SpanStatusCode, withSpan } from "@personalise-kings/observability/telemetry";
 
-const pollIntervalMs = positiveIntegerFromEnv("OUTBOX_POLL_INTERVAL_MS", 5000);
+const pollIntervalMs = positiveIntegerFromEnv("MAINTENANCE_POLL_INTERVAL_MS", 5000);
 const cleanupIntervalMs = positiveIntegerFromEnv("CLEANUP_INTERVAL_MS", 60_000);
 let lastCleanupAt = 0;
+let stopping = false;
+const activeOperations = new Set<Promise<unknown>>();
 
 async function cleanupExpiredTemporaryUploads() {
   const storage = createObjectStorageFromEnv();
@@ -164,19 +173,76 @@ async function cleanupExpiredAdminSecurityRecords() {
 }
 
 async function loop() {
+  if (stopping) return;
+  const startedAt = performance.now();
+  let outcome = "succeeded";
   try {
-    await processNextDeletionRequest();
+    await runMaintenanceTask("process_deletion_request", processNextDeletionRequest);
     if (Date.now() - lastCleanupAt > cleanupIntervalMs) {
-      await cleanupExpiredTemporaryUploads();
-      await cleanupExpiredPreviews();
-      await cleanupExpiredAdminSecurityRecords();
       lastCleanupAt = Date.now();
+      await runMaintenanceTask("cleanup_temporary_uploads", cleanupExpiredTemporaryUploads);
+      await runMaintenanceTask("cleanup_previews", cleanupExpiredPreviews);
+      await runMaintenanceTask("cleanup_generated_artifacts", cleanupExpiredGeneratedArtifacts);
+      await runMaintenanceTask("cleanup_admin_security", cleanupExpiredAdminSecurityRecords);
+      await runMaintenanceTask("reconcile_queues", reconcileQueues);
     }
   } catch (error) {
+    outcome = "failed";
     console.error("Maintenance worker polling cycle failed; retrying", error);
   } finally {
-    setTimeout(() => void loop(), pollIntervalMs);
+    addCounter("pk.worker.polls", 1, { worker: "maintenance", outcome });
+    recordHistogram("pk.worker.poll.duration", (performance.now() - startedAt) / 1000, { worker: "maintenance", outcome });
+    if (!stopping) setTimeout(() => void loop(), pollIntervalMs);
   }
+}
+
+async function operationalLoop() {
+  if (stopping) return;
+  try {
+    await trackOperation(runOperationalChecks());
+  } catch (error) {
+    logEvent("error", "operations.scheduler_failed", { service: "worker-maintenance", error: serializeError(error) });
+  } finally {
+    if (!stopping) setTimeout(() => void operationalLoop(), cleanupIntervalMs);
+  }
+}
+
+async function alertDeliveryLoop() {
+  if (stopping) return;
+  try {
+    await trackOperation(processOperationalAlertDeliveries());
+  } catch (error) {
+    logEvent("error", "operations.alert_delivery_scheduler_failed", { service: "worker-maintenance", error: serializeError(error) });
+  } finally {
+    if (!stopping) setTimeout(() => void alertDeliveryLoop(), pollIntervalMs);
+  }
+}
+
+async function runMaintenanceTask(name: string, task: () => Promise<unknown>) {
+  if (stopping) return;
+  const startedAt = performance.now();
+  await trackOperation(withSpan("maintenance.task", { "maintenance.task": name }, async (span) => {
+    try {
+      await task();
+      addCounter("pk.maintenance.tasks", 1, { task: name, outcome: "succeeded" });
+    } catch (error) {
+      span.recordException(error instanceof Error ? error : new Error(String(error)));
+      span.setStatus({ code: SpanStatusCode.ERROR });
+      addCounter("pk.maintenance.tasks", 1, { task: name, outcome: "failed" });
+      logEvent("error", "maintenance.task_failed", { service: "worker-maintenance", task: name, error: serializeError(error) });
+    } finally {
+      recordHistogram("pk.maintenance.task.duration", (performance.now() - startedAt) / 1000, { task: name });
+    }
+  }));
+}
+
+function trackOperation<T>(operation: Promise<T>) {
+  activeOperations.add(operation);
+  void operation.then(
+    () => activeOperations.delete(operation),
+    () => activeOperations.delete(operation)
+  );
+  return operation;
 }
 
 function positiveIntegerFromEnv(name: string, fallback: number) {
@@ -184,6 +250,19 @@ function positiveIntegerFromEnv(name: string, fallback: number) {
   return Number.isSafeInteger(value) && value > 0 ? value : fallback;
 }
 
+validateServiceEnvironment("worker-maintenance");
+await initializeTelemetry("personalise-kings-worker-maintenance");
 console.log("PersonaliseKings maintenance worker started");
 console.warn("Outbox dispatcher is not configured; events will remain pending");
+async function shutdown() {
+  stopping = true;
+  await Promise.allSettled([...activeOperations]);
+  await shutdownTelemetry().catch(() => undefined);
+  await prisma.$disconnect().catch(() => undefined);
+  process.exit(0);
+}
+process.once("SIGINT", () => void shutdown());
+process.once("SIGTERM", () => void shutdown());
 void loop();
+void operationalLoop();
+void alertDeliveryLoop();

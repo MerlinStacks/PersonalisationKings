@@ -267,7 +267,7 @@ function normalizeApplicationUrl(value: string) {
   } catch {
     throw new Error("PK_WEBAPP_URL must be a valid URL");
   }
-  const localHttp = process.env.NODE_ENV !== "production" && url.protocol === "http:"
+  const localHttp = process.env.NODE_ENV === "development" && url.protocol === "http:"
     && (url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1");
   if (url.protocol !== "https:" && !localHttp) throw new Error("PK_WEBAPP_URL must use HTTPS");
   if (url.username || url.password || url.search || url.hash || (url.pathname !== "/" && url.pathname !== "")) {
@@ -277,5 +277,5 @@ function normalizeApplicationUrl(value: string) {
 }
 
 function privateStoreUrlsAllowed() {
-  return process.env.NODE_ENV !== "production" && process.env.PK_ALLOW_PRIVATE_STORE_URLS === "true";
+  return process.env.NODE_ENV === "development" && process.env.PK_ALLOW_PRIVATE_STORE_URLS === "true";
 }

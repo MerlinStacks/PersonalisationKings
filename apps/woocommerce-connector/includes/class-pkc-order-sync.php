@@ -451,7 +451,7 @@ class PKC_Order_Sync {
         $api_url = rtrim( (string) get_option( PKC_Settings::OPTION_API_URL, '' ), '/' );
         $store_id = $current_store_id;
         $credential = PKC_Settings::signing_credential();
-        if ( '' === $api_url || '' === $store_id || ! $credential ) {
+        if ( ! PKC_Settings::is_valid_endpoint_url( $api_url ) || '' === $store_id || ! $credential ) {
             $this->retry_outbox( $row, $claim_token, 'Connector credentials are incomplete.', null, true );
             return;
         }
@@ -522,10 +522,11 @@ class PKC_Order_Sync {
             return;
         }
 
-        $response = wp_remote_post(
+        $response = wp_safe_remote_post(
             $api_url . '/v1/connector/events',
             array(
                 'timeout' => 10,
+                'redirection' => 0,
                 'limit_response_size' => 4096,
                 'headers' => array(
                     'Content-Type'   => 'application/json',

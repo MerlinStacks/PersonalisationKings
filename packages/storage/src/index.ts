@@ -1,6 +1,7 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { mkdir, open, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
+export { isProductionArtifactKey } from "./artifact";
 
 export { validateRasterUpload, type MediaValidationResult } from "./media-validation";
 
@@ -164,8 +165,8 @@ function signLocalObjectUrl(method: "GET" | "PUT", key: ObjectKey, expiresAt: nu
 function localObjectSigningSecret() {
   const configured = process.env.PK_OBJECT_URL_SECRET;
   if (configured) return configured;
-  if (process.env.NODE_ENV === "production") throw new Error("PK_OBJECT_URL_SECRET must be configured in production");
-  return "dev-object-url-secret-change-me";
+  if (process.env.NODE_ENV === "development" || process.env.NODE_ENV === "test") return "dev-object-url-secret-change-me";
+  throw new Error("PK_OBJECT_URL_SECRET must be configured outside development and tests");
 }
 
 async function streamToBytes(stream: ReadableStream, maximumBytes: number) {

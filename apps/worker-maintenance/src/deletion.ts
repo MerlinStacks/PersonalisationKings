@@ -1,6 +1,7 @@
 import { prisma } from "@personalise-kings/db";
 import { createObjectStorageFromEnv, type ObjectKey } from "@personalise-kings/storage";
 import { Prisma, type DeletionRequest } from "@prisma/client";
+import { addCounter } from "@personalise-kings/observability/telemetry";
 
 const staleClaimMs = 15 * 60 * 1000;
 const maximumAttempts = 10;
@@ -14,21 +15,35 @@ interface DeletionPlan {
   objectKeys: string[];
 }
 
+interface DeletionTerminalOutcome {
+  outcome: "blocked" | "already_deleted";
+}
+
 export async function processNextDeletionRequest() {
   const request = await claimDeletionRequest();
-  if (!request) return false;
+  if (!request?.claimedAt) return false;
+  let outcome = "processed";
   try {
     const plan = parsePlan(request.executionPlan) ?? await prepareDeletion(request);
-    if (!plan) return true;
+    if ("outcome" in plan) {
+      addCounter("pk.deletion.attempts", 1, { outcome: plan.outcome });
+      return true;
+    }
     const storage = createObjectStorageFromEnv();
-    for (const key of plan.objectKeys) await storage.deleteObject(key as ObjectKey);
+    for (const key of plan.objectKeys) {
+      await renewDeletionClaim(request);
+      await storage.deleteObject(key as ObjectKey);
+    }
+    await renewDeletionClaim(request);
     await finalizeDeletion(request, plan);
   } catch (error) {
+    const terminal = request.attempts >= maximumAttempts;
+    outcome = terminal ? "failed" : "retry";
     const message = (error instanceof Error ? error.message : "Unknown deletion error").slice(0, 1000);
     await prisma.deletionRequest.updateMany({
       where: { id: request.id, merchantId: request.merchantId, status: "processing", claimedAt: request.claimedAt },
       data: {
-        status: request.attempts >= maximumAttempts ? "failed" : "pending",
+        status: terminal ? "failed" : "pending",
         claimedAt: null,
         nextAttemptAt: new Date(Date.now() + Math.min(15 * 60_000, 15_000 * 2 ** Math.max(0, request.attempts - 1))),
         lastError: message
@@ -36,7 +51,18 @@ export async function processNextDeletionRequest() {
     });
     console.error(`Deletion request ${request.id} will retry: ${message}`);
   }
+  addCounter("pk.deletion.attempts", 1, { outcome });
   return true;
+}
+
+async function renewDeletionClaim(request: DeletionRequest) {
+  const claimedAt = new Date();
+  const renewed = await prisma.deletionRequest.updateMany({
+    where: { id: request.id, merchantId: request.merchantId, status: "processing", claimedAt: request.claimedAt },
+    data: { claimedAt }
+  });
+  if (renewed.count !== 1) throw new Error("Deletion request claim was lost before storage deletion");
+  request.claimedAt = claimedAt;
 }
 
 async function claimDeletionRequest() {
@@ -62,8 +88,9 @@ async function claimDeletionRequest() {
   });
 }
 
-async function prepareDeletion(request: DeletionRequest): Promise<DeletionPlan | null> {
+async function prepareDeletion(request: DeletionRequest): Promise<DeletionPlan | DeletionTerminalOutcome> {
   return prisma.$transaction(async (tx) => {
+    await assertDeletionClaim(tx, request);
     const sourceVersions = request.subjectType === "Asset"
       ? await tx.assetVersion.findMany({
         where: { merchantId: request.merchantId, assetId: request.subjectId, deletedAt: null, asset: { kind: "upload" } },
@@ -74,11 +101,21 @@ async function prepareDeletion(request: DeletionRequest): Promise<DeletionPlan |
         select: { id: true, assetId: true, objectKey: true }
       });
     if (sourceVersions.length === 0) {
-      await tx.deletionRequest.update({
-        where: { id: request.id },
+      const completed = await tx.deletionRequest.updateMany({
+        where: { id: request.id, merchantId: request.merchantId, status: "processing", claimedAt: request.claimedAt },
         data: { status: "live_deleted", liveDeletedAt: new Date(), claimedAt: null, eligibilityReason: "No live customer upload remained" }
       });
-      return null;
+      if (completed.count !== 1) throw new Error("Deletion request claim was lost during preparation");
+      await tx.auditEvent.create({
+        data: {
+          merchantId: request.merchantId,
+          action: "deletion_request.live_storage_deleted",
+          targetType: "DeletionRequest",
+          targetId: request.id,
+          metadata: { sourceVersionsDeleted: 0, derivativesDeleted: 0, sessionsDeleted: 0, reason: "No live customer upload remained" }
+        }
+      });
+      return { outcome: "already_deleted" };
     }
 
     const sourceIds = new Set(sourceVersions.map((version) => version.id));
@@ -103,12 +140,12 @@ async function prepareDeletion(request: DeletionRequest): Promise<DeletionPlan |
     ]);
 
     if (designVersions.some((version) => jsonContainsExact(version.sceneGraph, sourceIds))) {
-      await blockRequest(tx, request.id, "Customer upload is referenced by an immutable design version");
-      return null;
+      await blockRequest(tx, request, "Customer upload is referenced by an immutable design version");
+      return { outcome: "blocked" };
     }
     if (snapshots.some((snapshot) => jsonContainsExact(snapshot.snapshot, sourceIds))) {
-      await blockRequest(tx, request.id, "Customer upload is retained in an order artwork snapshot");
-      return null;
+      await blockRequest(tx, request, "Customer upload is retained in an order artwork snapshot");
+      return { outcome: "blocked" };
     }
 
     const affectedSessions = sessions.filter((session) => jsonContainsExact(session.renderSpec, sourceIds)
@@ -117,8 +154,8 @@ async function prepareDeletion(request: DeletionRequest): Promise<DeletionPlan |
     const ordered = affectedSessions.some((session) => ["ordered", "ready", "needs_review"].includes(session.status)
       || session.revisions.some((revision) => revision.lineItems.length > 0 || revision.snapshots.length > 0));
     if (ordered) {
-      await blockRequest(tx, request.id, "Customer upload is linked to an order or production record");
-      return null;
+      await blockRequest(tx, request, "Customer upload is linked to an order or production record");
+      return { outcome: "blocked" };
     }
 
     const derivatives = affectedSessions.flatMap((session) => session.revisions.flatMap((revision) => [
@@ -146,10 +183,11 @@ async function prepareDeletion(request: DeletionRequest): Promise<DeletionPlan |
       where: { merchantId: request.merchantId, customisationRevision: { sessionId: { in: plan.sessionIds } } },
       data: { status: "failed", claimedAt: null, lastError: "Cancelled by customer upload erasure" }
     });
-    await tx.deletionRequest.update({
-      where: { id: request.id },
+    const persisted = await tx.deletionRequest.updateMany({
+      where: { id: request.id, merchantId: request.merchantId, status: "processing", claimedAt: request.claimedAt },
       data: { executionPlan: plan as unknown as Prisma.InputJsonValue, eligibilityReason: "Eligible unordered customer upload", lastError: null }
     });
+    if (persisted.count !== 1) throw new Error("Deletion request claim was lost during preparation");
     return plan;
   }, { isolationLevel: "Serializable" });
 }
@@ -195,11 +233,34 @@ async function finalizeDeletion(request: DeletionRequest, plan: DeletionPlan) {
   console.log(`Completed live deletion request ${request.id}`);
 }
 
-async function blockRequest(tx: Prisma.TransactionClient, requestId: string, reason: string) {
-  await tx.deletionRequest.update({
-    where: { id: requestId },
+async function blockRequest(tx: Prisma.TransactionClient, request: DeletionRequest, reason: string) {
+  const blocked = await tx.deletionRequest.updateMany({
+    where: { id: request.id, merchantId: request.merchantId, status: "processing", claimedAt: request.claimedAt },
     data: { status: "blocked_ordered", claimedAt: null, eligibilityReason: reason, lastError: null }
   });
+  if (blocked.count !== 1) throw new Error("Deletion request claim was lost before it could be blocked");
+  await tx.auditEvent.create({
+    data: {
+      merchantId: request.merchantId,
+      action: "deletion_request.blocked",
+      targetType: "DeletionRequest",
+      targetId: request.id,
+      metadata: { reason }
+    }
+  });
+}
+
+async function assertDeletionClaim(tx: Prisma.TransactionClient, request: DeletionRequest) {
+  const rows = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+    SELECT "id"
+    FROM "DeletionRequest"
+    WHERE "id" = ${request.id}
+      AND "merchantId" = ${request.merchantId}
+      AND "status" = 'processing'::"DeletionRequestStatus"
+      AND "claimedAt" = ${request.claimedAt}
+    FOR UPDATE
+  `);
+  if (rows.length !== 1) throw new Error("Deletion request claim was lost before preparation");
 }
 
 export function jsonContainsExact(value: unknown, targets: ReadonlySet<string>): boolean {

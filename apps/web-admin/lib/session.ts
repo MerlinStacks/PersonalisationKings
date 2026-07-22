@@ -1,4 +1,5 @@
 import { generateSessionToken, hashSessionToken, type StaffRole } from "@personalise-kings/auth";
+import { insecureDevelopmentEnabled } from "@personalise-kings/config/server";
 import { prisma } from "@personalise-kings/db";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
@@ -21,7 +22,7 @@ export async function getAdminSession(): Promise<AdminSession> {
   const session = await getOptionalAdminSession();
   if (session) return session;
 
-  if (process.env.NODE_ENV !== "production" && process.env.PK_ALLOW_DEV_SESSION === "true") {
+  if (insecureDevelopmentEnabled() && process.env.PK_ALLOW_DEV_SESSION === "true") {
     const user = await prisma.staffUser.findUnique({ where: { id: "seed-owner" } });
     if (user) return {
       sessionId: "development-bypass",
@@ -109,7 +110,7 @@ export async function setOpaqueSessionCookie(token: string, expiresAt: Date) {
   cookieStore.set(ADMIN_SESSION_COOKIE, token, {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    secure: process.env.NODE_ENV !== "development",
     path: "/",
     maxAge: Math.max(0, Math.floor((expiresAt.getTime() - Date.now()) / 1000))
   });

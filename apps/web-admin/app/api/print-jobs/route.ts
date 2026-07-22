@@ -42,22 +42,24 @@ export async function POST(request: Request) {
     return badRequest("Order and artwork snapshot must belong to the current merchant");
   }
 
-  const printJob = await prisma.printJob.create({
-    data: {
+  const printJob = await prisma.$transaction(async (tx) => {
+    const createdPrintJob = await tx.printJob.create({
+      data: {
+        merchantId: session.merchantId,
+        orderId: parsed.data.orderId,
+        artworkSnapshotId: parsed.data.artworkSnapshotId,
+        status: "queued"
+      }
+    });
+    await writeAuditEvent({
       merchantId: session.merchantId,
-      orderId: parsed.data.orderId,
-      artworkSnapshotId: parsed.data.artworkSnapshotId,
-      status: "queued"
-    }
-  });
-
-  await writeAuditEvent({
-    merchantId: session.merchantId,
-    actorUserId: session.userId,
-    action: "print_job.create",
-    targetType: "PrintJob",
-    targetId: printJob.id,
-    metadata: { orderId: parsed.data.orderId, artworkSnapshotId: parsed.data.artworkSnapshotId }
+      actorUserId: session.userId,
+      action: "print_job.create",
+      targetType: "PrintJob",
+      targetId: createdPrintJob.id,
+      metadata: { orderId: parsed.data.orderId, artworkSnapshotId: parsed.data.artworkSnapshotId }
+    }, tx);
+    return createdPrintJob;
   });
 
   return created(printJob);

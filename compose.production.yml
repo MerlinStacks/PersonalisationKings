@@ -1,0 +1,196 @@
+x-app-build: &app-build
+  context: .
+  dockerfile: Dockerfile
+  target: runtime
+
+x-runtime-environment: &runtime-environment
+  NODE_ENV: production
+  DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+  OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+  OTEL_EXPORTER_OTLP_HEADERS: ${OTEL_EXPORTER_OTLP_HEADERS:-}
+  OTEL_SERVICE_VERSION: ${OTEL_SERVICE_VERSION:-unversioned}
+  OTEL_METRIC_EXPORT_INTERVAL_MS: ${OTEL_METRIC_EXPORT_INTERVAL_MS:-60000}
+
+x-storage-environment: &storage-environment
+  OBJECT_STORAGE_ROOT: /data/personalise-kings/objects
+  OBJECT_STORAGE_MAX_BYTES: ${OBJECT_STORAGE_MAX_BYTES:-26214400}
+
+x-app-security: &app-security
+  init: true
+  restart: unless-stopped
+  stop_grace_period: 2m
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+
+x-storage-volume: &storage-volume
+  type: volume
+  source: object-storage
+  target: /data/personalise-kings/objects
+
+services:
+  postgres:
+    image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-personalise_kings}
+      POSTGRES_USER: ${POSTGRES_USER:-personalise_kings}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    security_opt:
+      - no-new-privileges:true
+
+  migrate:
+    build: *app-build
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+    command: ["bun", "--filter", "@personalise-kings/db", "prisma", "migrate", "deploy", "--schema", "prisma/schema.prisma"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  web-admin:
+    <<: *app-security
+    build: *app-build
+    environment:
+      <<: [*runtime-environment, *storage-environment]
+      PORT: 3000
+      PK_WEBAPP_URL: ${PK_WEBAPP_URL:?PK_WEBAPP_URL is required}
+      PK_CUSTOMISER_URL: ${PK_CUSTOMISER_URL:?PK_CUSTOMISER_URL is required}
+      PK_API_URL: ${PK_API_URL:?PK_API_URL is required}
+      PK_ADMIN_MFA_ENCRYPTION_KEY: ${PK_ADMIN_MFA_ENCRYPTION_KEY:?PK_ADMIN_MFA_ENCRYPTION_KEY is required}
+      PK_ADMIN_RECOVERY_CODE_PEPPER: ${PK_ADMIN_RECOVERY_CODE_PEPPER:?PK_ADMIN_RECOVERY_CODE_PEPPER is required}
+      PK_CONNECTOR_SECRET_ENCRYPTION_KEY: ${PK_CONNECTOR_SECRET_ENCRYPTION_KEY:?PK_CONNECTOR_SECRET_ENCRYPTION_KEY is required}
+      PK_EMBED_TOKEN_SECRET: ${PK_EMBED_TOKEN_SECRET:?PK_EMBED_TOKEN_SECRET is required}
+      PK_OBJECT_URL_SECRET: ${PK_OBJECT_URL_SECRET:?PK_OBJECT_URL_SECRET is required}
+    command: ["bun", "--filter", "@personalise-kings/web-admin", "start"]
+    ports:
+      - "${PK_BIND_ADDRESS:-127.0.0.1}:${PK_WEBAPP_PORT:-3000}:3000"
+    volumes:
+      - *storage-volume
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  customiser:
+    <<: *app-security
+    build: *app-build
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      PK_API_URL: ${PK_API_URL:?PK_API_URL is required}
+    command: ["bun", "--filter", "@personalise-kings/customiser", "start"]
+    ports:
+      - "${PK_BIND_ADDRESS:-127.0.0.1}:${PK_CUSTOMISER_PORT:-3001}:3001"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:3001/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  api:
+    <<: *app-security
+    build: *app-build
+    environment:
+      <<: [*runtime-environment, *storage-environment]
+      PORT: 3002
+      PK_WEBAPP_URL: ${PK_WEBAPP_URL:?PK_WEBAPP_URL is required}
+      PK_CUSTOMISER_URL: ${PK_CUSTOMISER_URL:?PK_CUSTOMISER_URL is required}
+      PK_API_URL: ${PK_API_URL:?PK_API_URL is required}
+      PK_CONNECTOR_SECRET_ENCRYPTION_KEY: ${PK_CONNECTOR_SECRET_ENCRYPTION_KEY:?PK_CONNECTOR_SECRET_ENCRYPTION_KEY is required}
+      PK_EMBED_TOKEN_SECRET: ${PK_EMBED_TOKEN_SECRET:?PK_EMBED_TOKEN_SECRET is required}
+      PK_OBJECT_URL_SECRET: ${PK_OBJECT_URL_SECRET:?PK_OBJECT_URL_SECRET is required}
+      PK_CONNECTOR_REPLAY_WINDOW_SECONDS: ${PK_CONNECTOR_REPLAY_WINDOW_SECONDS:-300}
+      PK_CUSTOMISATION_TTL_SECONDS: ${PK_CUSTOMISATION_TTL_SECONDS:-86400}
+    command: ["bun", "apps/api/src/server.ts"]
+    ports:
+      - "${PK_BIND_ADDRESS:-127.0.0.1}:${PK_API_PORT:-3002}:3002"
+    volumes:
+      - *storage-volume
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:3002/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  worker-maintenance:
+    <<: *app-security
+    build: *app-build
+    environment:
+      <<: [*runtime-environment, *storage-environment]
+      MAINTENANCE_POLL_INTERVAL_MS: ${MAINTENANCE_POLL_INTERVAL_MS:-5000}
+      CLEANUP_INTERVAL_MS: ${CLEANUP_INTERVAL_MS:-60000}
+      PROOF_JOB_MAX_ATTEMPTS: ${PROOF_JOB_MAX_ATTEMPTS:-5}
+      PK_OPERATIONS_ALERT_WEBHOOK_URL: ${PK_OPERATIONS_ALERT_WEBHOOK_URL:-}
+      PK_OPERATIONS_ALERT_WEBHOOK_SECRET: ${PK_OPERATIONS_ALERT_WEBHOOK_SECRET:-}
+      PK_OPERATIONS_ALERT_TIMEOUT_MS: ${PK_OPERATIONS_ALERT_TIMEOUT_MS:-5000}
+    command: ["bun", "apps/worker-maintenance/src/index.ts"]
+    volumes:
+      - *storage-volume
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  worker-render:
+    <<: *app-security
+    build: *app-build
+    environment:
+      <<: *runtime-environment
+      PRINT_JOB_POLL_INTERVAL_MS: ${PRINT_JOB_POLL_INTERVAL_MS:-5000}
+    command: ["bun", "apps/worker-render/src/index.ts"]
+    volumes:
+      - *storage-volume
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  worker-proof:
+    <<: *app-security
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: proof
+    environment:
+      <<: [*runtime-environment, *storage-environment]
+      PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+      PROOF_JOB_POLL_INTERVAL_MS: ${PROOF_JOB_POLL_INTERVAL_MS:-5000}
+      PROOF_JOB_MAX_ATTEMPTS: ${PROOF_JOB_MAX_ATTEMPTS:-5}
+    command: ["bun", "apps/worker-proof/src/index.ts"]
+    shm_size: 1gb
+    volumes:
+      - *storage-volume
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  postgres-data:
+  object-storage:

@@ -16,5 +16,12 @@ export async function GET() {
     take: 100
   });
 
-  return ok({ items: artifacts });
+  return ok({
+    items: artifacts.map((artifact) => ({
+      ...artifact,
+      byteSize: artifact.byteSize.toString(),
+      availability: artifact.bytesDeletedAt ? "expired" : artifact.cleanupClaimedAt ? "cleanup_pending" : "available",
+      retentionHeld: Boolean(artifact.retentionHoldAt && (!artifact.retentionHoldUntil || artifact.retentionHoldUntil > new Date()))
+    }))
+  });
 }

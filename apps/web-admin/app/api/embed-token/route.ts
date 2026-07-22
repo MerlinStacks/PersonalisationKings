@@ -2,6 +2,7 @@ import { signEmbedToken } from "@personalise-kings/auth";
 import { prisma } from "@personalise-kings/db";
 import * as z from "zod";
 import { badRequest, ok, parseJson } from "../../../lib/api";
+import { writeAuditEvent } from "../../../lib/audit";
 import { requirePermission } from "../../../lib/rbac";
 import { requireSameOrigin } from "../../../lib/same-origin";
 
@@ -43,8 +44,9 @@ export async function POST(request: Request) {
   }
 
   const secret = process.env.PK_EMBED_TOKEN_SECRET
-    ?? (process.env.NODE_ENV === "production" ? null : "dev-embed-secret-change-me");
+    ?? (process.env.NODE_ENV === "development" || process.env.NODE_ENV === "test" ? "dev-embed-secret-change-me" : null);
   if (!secret) return ok({ error: "embed_secret_not_configured" }, { status: 503 });
+  const expiresInSeconds = 15 * 60;
   const token = signEmbedToken({
     storeId: mapping.storeId,
     allowedOrigin,
@@ -52,8 +54,16 @@ export async function POST(request: Request) {
     externalVariantId: parsed.data.externalVariantId,
     designId: mapping.designId,
     designVersionId: mapping.design.currentVersionId,
-    expiresAt: Math.floor(Date.now() / 1000) + 15 * 60
+    expiresAt: Math.floor(Date.now() / 1000) + expiresInSeconds
   }, secret);
+  await writeAuditEvent({
+    merchantId: session.merchantId,
+    actorUserId: session.userId,
+    action: "embed_token.issue",
+    targetType: "ProductMapping",
+    targetId: mapping.id,
+    metadata: { storeId: mapping.storeId, designId: mapping.designId, expiresInSeconds }
+  });
 
-  return ok({ embedToken: token, expiresInSeconds: 900 });
+  return ok({ embedToken: token, expiresInSeconds });
 }

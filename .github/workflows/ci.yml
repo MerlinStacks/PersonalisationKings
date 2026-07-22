@@ -15,6 +15,7 @@ concurrency:
 
 env:
   DATABASE_URL: postgresql://personalise_kings:personalise_kings@127.0.0.1:5432/personalise_kings?schema=public
+  POSTGRES_PASSWORD: personalise_kings
   OBJECT_STORAGE_ROOT: /tmp/personalise-kings-storage
   PK_WEBAPP_URL: http://localhost:3000
   PK_CUSTOMISER_URL: http://localhost:3001
@@ -25,6 +26,7 @@ env:
   PK_EMBED_TOKEN_SECRET: ci-only-embed-token-secret
   PK_OBJECT_URL_SECRET: ci-only-object-url-secret
   PK_DEMO_CONNECTOR_SECRET: ci-only-connector-secret
+  PK_RUN_DATABASE_INTEGRATION_TESTS: "true"
 
 jobs:
   validate:
@@ -33,7 +35,7 @@ jobs:
     timeout-minutes: 30
     services:
       postgres:
-        image: postgres:16-alpine
+        image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
         env:
           POSTGRES_DB: personalise_kings
           POSTGRES_USER: personalise_kings
@@ -74,12 +76,15 @@ jobs:
           bun --filter @personalise-kings/db prisma migrate status --schema prisma/schema.prisma
 
       - name: Validate development service configuration
-        run: docker compose config --quiet
+        run: |
+          docker compose config --quiet
+          docker compose -f compose.production.yml config --quiet
 
       - name: Check WooCommerce connector syntax
         run: |
           git ls-files '*.php' | xargs -r -n1 php -l
           git ls-files 'apps/woocommerce-connector/assets/*.js' | xargs -r -n1 node --check
+          php apps/woocommerce-connector/tests/mapping-state.php
 
       - name: Typecheck
         run: bun run typecheck

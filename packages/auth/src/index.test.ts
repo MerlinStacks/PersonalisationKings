@@ -11,10 +11,33 @@ describe("password hashing", () => {
 });
 
 describe("staff permissions", () => {
+  it("limits design and asset mutation to owners and designers", () => {
+    expect(roleCan("owner_admin", "manage_design")).toBe(true);
+    expect(roleCan("designer", "manage_design")).toBe(true);
+    expect(roleCan("production_operator", "manage_design")).toBe(false);
+    expect(roleCan("support", "manage_design")).toBe(false);
+    expect(roleCan("auditor", "manage_design")).toBe(false);
+  });
+
   it("allows owners and production operators to inspect order artwork", () => {
     expect(roleCan("owner_admin", "view_order")).toBe(true);
     expect(roleCan("owner_admin", "view_customisation")).toBe(true);
     expect(roleCan("production_operator", "view_customisation")).toBe(true);
+  });
+
+  it("limits artifact retention holds to owners and production operators", () => {
+    expect(roleCan("owner_admin", "manage_artifact_retention")).toBe(true);
+    expect(roleCan("production_operator", "manage_artifact_retention")).toBe(true);
+    expect(roleCan("designer", "manage_artifact_retention")).toBe(false);
+    expect(roleCan("support", "manage_artifact_retention")).toBe(false);
+    expect(roleCan("auditor", "manage_artifact_retention")).toBe(false);
+  });
+
+  it("allows auditors to view but not acknowledge operational alerts", () => {
+    expect(roleCan("owner_admin", "acknowledge_operational_alert")).toBe(true);
+    expect(roleCan("production_operator", "acknowledge_operational_alert")).toBe(true);
+    expect(roleCan("auditor", "view_operations")).toBe(true);
+    expect(roleCan("auditor", "acknowledge_operational_alert")).toBe(false);
   });
 });
 

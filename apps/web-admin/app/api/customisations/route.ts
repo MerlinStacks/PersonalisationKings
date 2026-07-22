@@ -3,6 +3,7 @@ import { sceneGraphSchema } from "@personalise-kings/render-schema";
 import { randomUUID } from "node:crypto";
 import * as z from "zod";
 import { badRequest, created, ok, parseJson, toInputJson } from "../../../lib/api";
+import { writeAuditEvent } from "../../../lib/audit";
 import { requirePermission } from "../../../lib/rbac";
 import { requireSameOrigin } from "../../../lib/same-origin";
 
@@ -81,22 +82,27 @@ export async function POST(request: Request) {
       }
     });
 
-    if (!parsed.data.commit || !parsed.data.renderSpec) {
-      return { session: sessionRow, revision: null };
-    }
-
-    const revision = await tx.customisationRevision.create({
-      data: {
-        merchantId: session.merchantId,
-        sessionId: sessionRow.id,
-        designVersionId: design.versions[0].id,
-        revision: 1,
-        opaqueReference: `pk_${randomUUID()}`,
-        customerInputs: toInputJson(parsed.data.customerInputs),
-        renderSpec: toInputJson(parsed.data.renderSpec)
-      }
-    });
-
+    const revision = !parsed.data.commit || !parsed.data.renderSpec
+      ? null
+      : await tx.customisationRevision.create({
+        data: {
+          merchantId: session.merchantId,
+          sessionId: sessionRow.id,
+          designVersionId: design.versions[0].id,
+          revision: 1,
+          opaqueReference: `pk_${randomUUID()}`,
+          customerInputs: toInputJson(parsed.data.customerInputs),
+          renderSpec: toInputJson(parsed.data.renderSpec)
+        }
+      });
+    await writeAuditEvent({
+      merchantId: session.merchantId,
+      actorUserId: session.userId,
+      action: "customisation.admin_create",
+      targetType: "CustomisationSession",
+      targetId: sessionRow.id,
+      metadata: { storeId: store.id, designId: design.id, revisionId: revision?.id ?? null, status: sessionRow.status }
+    }, tx);
     return { session: sessionRow, revision };
   });
 

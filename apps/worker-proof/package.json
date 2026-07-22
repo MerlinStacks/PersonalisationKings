@@ -3,14 +3,16 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "bun --watch src/index.ts",
+    "dev": "NODE_ENV=development bun --watch src/index.ts",
     "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
+    "@personalise-kings/config": "workspace:*",
     "@personalise-kings/design-engine": "workspace:*",
     "@personalise-kings/db": "workspace:*",
+    "@personalise-kings/observability": "workspace:*",
     "@personalise-kings/render-schema": "workspace:*",
     "@personalise-kings/storage": "workspace:*",
     "@prisma/client": "^6.19.0",

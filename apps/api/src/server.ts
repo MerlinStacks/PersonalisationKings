@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { connectorEventEnvelopeSchema } from "@personalise-kings/connector-contracts";
+import { validateServiceEnvironment } from "@personalise-kings/config/server";
 import { getOrCreateCorrelationId } from "@personalise-kings/observability";
+import { addCounter, initializeTelemetry, recordHistogram, shutdownTelemetry, SpanStatusCode, withServerSpan } from "@personalise-kings/observability/telemetry";
 import { authenticateStoreRequest } from "./connector-auth";
 import { ingestConnectorEvent, InvalidCustomisationReferenceError } from "./connector-events";
 import {
@@ -16,9 +18,13 @@ import { canonicalJson } from "./json";
 import { handleObjectRequest } from "./objects";
 import { InvalidRequestEncodingError, readRequestText, RequestBodyTooLargeError, UnsupportedMediaTypeError } from "./request-body";
 import { consumeRateLimit } from "./rate-limit";
+import { apiRouteName, normalizedHttpMethod } from "./telemetry";
 
 const port = Number(process.env.PORT ?? 3002);
 const replayWindowSeconds = Number(process.env.PK_CONNECTOR_REPLAY_WINDOW_SECONDS ?? 300);
+
+validateServiceEnvironment("api");
+await initializeTelemetry("personalise-kings-api");
 
 export async function handleApiRequest(request: Request, peerAddress = "unknown") {
     const url = new URL(request.url);
@@ -119,13 +125,35 @@ export async function handleApiRequest(request: Request, peerAddress = "unknown"
     }
 }
 
-Bun.serve({
+const server = Bun.serve({
   port,
   async fetch(request, server) {
-    const response = await handleApiRequest(request, server.requestIP(request)?.address ?? "unknown");
-    return apiSecurityHeaders(response);
+    const startedAt = performance.now();
+    const route = apiRouteName(new URL(request.url).pathname);
+    const method = normalizedHttpMethod(request.method);
+    return withServerSpan("http.server.request", request.headers, {
+      "http.request.method": method,
+      "http.route": route
+    }, async (span) => {
+      const response = apiSecurityHeaders(await handleApiRequest(request, server.requestIP(request)?.address ?? "unknown"));
+      span.setAttribute("http.response.status_code", response.status);
+      if (response.status >= 500) span.setStatus({ code: SpanStatusCode.ERROR });
+      const attributes = { route, method, status_class: `${Math.floor(response.status / 100)}xx` };
+      addCounter("pk.api.requests", 1, attributes);
+      recordHistogram("pk.api.request.duration", (performance.now() - startedAt) / 1000, attributes);
+      return response;
+    });
   }
 });
+
+async function shutdown() {
+  await server.stop(false);
+  await shutdownTelemetry().catch(() => undefined);
+  process.exit(0);
+}
+
+process.once("SIGINT", () => void shutdown());
+process.once("SIGTERM", () => void shutdown());
 
 async function readJsonBody(request: Request, maximumBytes: number) {
   const contentType = request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
@@ -188,7 +216,8 @@ function browserOrigins() {
   const origins = new Set<string>();
   const customiser = customiserOrigin();
   if (customiser) origins.add(customiser);
-  const webapp = process.env.PK_WEBAPP_URL ?? (process.env.NODE_ENV === "production" ? null : "http://localhost:3000");
+  const webapp = process.env.PK_WEBAPP_URL
+    ?? (process.env.NODE_ENV === "development" || process.env.NODE_ENV === "test" ? "http://localhost:3000" : null);
   if (webapp) {
     try { origins.add(new URL(webapp).origin); } catch { /* Invalid configuration is not trusted. */ }
   }

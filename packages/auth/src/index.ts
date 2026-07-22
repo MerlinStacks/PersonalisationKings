@@ -13,6 +13,9 @@ export const PERMISSIONS = [
   "manage_staff",
   "download_artifact",
   "regenerate_artifact",
+  "manage_artifact_retention",
+  "view_operations",
+  "acknowledge_operational_alert",
   "delete_asset",
   "view_order",
   "view_customisation",
@@ -30,11 +33,11 @@ export const ROLE_LABELS: Record<StaffRole, string> = {
 };
 
 export const ROLE_PERMISSIONS = {
-  owner_admin: ["manage_store", "manage_design", "manage_staff", "download_artifact", "regenerate_artifact", "delete_asset", "view_order", "view_customisation", "view_audit"],
+  owner_admin: ["manage_store", "manage_design", "manage_staff", "download_artifact", "regenerate_artifact", "manage_artifact_retention", "view_operations", "acknowledge_operational_alert", "delete_asset", "view_order", "view_customisation", "view_audit"],
   designer: ["manage_design"],
-  production_operator: ["download_artifact", "regenerate_artifact", "view_order", "view_customisation"],
+  production_operator: ["download_artifact", "regenerate_artifact", "manage_artifact_retention", "view_operations", "acknowledge_operational_alert", "view_order", "view_customisation"],
   support: ["view_order", "view_customisation"],
-  auditor: ["view_order", "view_customisation", "view_audit"]
+  auditor: ["view_order", "view_customisation", "view_audit", "view_operations"]
 } as const satisfies Record<StaffRole, readonly Permission[]>;
 
 export function roleCan(role: StaffRole, permission: Permission) {

@@ -3,13 +3,14 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "bun --watch src/server.ts",
+    "dev": "NODE_ENV=development bun --watch src/server.ts",
     "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
     "@personalise-kings/auth": "workspace:*",
+    "@personalise-kings/config": "workspace:*",
     "@personalise-kings/connector-contracts": "workspace:*",
     "@personalise-kings/design-engine": "workspace:*",
     "@personalise-kings/db": "workspace:*",

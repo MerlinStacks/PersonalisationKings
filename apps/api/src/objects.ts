@@ -1,4 +1,5 @@
 import { prisma } from "@personalise-kings/db";
+import { addCounter, recordHistogram, withSpan } from "@personalise-kings/observability/telemetry";
 import { createObjectStorageFromEnv, isObjectKey, verifyLocalObjectUrl } from "@personalise-kings/storage";
 
 export async function handleObjectRequest(request: Request, url: URL, correlationId: string) {
@@ -47,19 +48,43 @@ export async function handleObjectRequest(request: Request, url: URL, correlatio
     }
   }
 
-  const bytes = await storage.getObject(key);
+  const readLeaseUntil = new Date(Date.now() + 5 * 60 * 1000);
   const assetVersion = await prisma.assetVersion.findFirst({
     where: { objectKey: key, deletedAt: null },
     select: { contentType: true }
   });
-  const body = new ArrayBuffer(bytes.byteLength);
-  new Uint8Array(body).set(bytes);
-  return new Response(body, {
-    headers: {
-      "content-type": assetVersion?.contentType ?? "application/octet-stream",
-      "cache-control": "private, max-age=300",
-      "x-content-type-options": "nosniff",
-      "x-correlation-id": correlationId
+  const generatedArtifacts = assetVersion ? [] : await prisma.$queryRaw<Array<{ contentType: string }>>`
+      UPDATE "GeneratedArtifact"
+      SET "downloadLeaseUntil" = GREATEST(COALESCE("downloadLeaseUntil", ${readLeaseUntil}), ${readLeaseUntil})
+      WHERE "objectKey" = ${key}
+        AND "bytesDeletedAt" IS NULL
+        AND "cleanupClaimedAt" IS NULL
+      RETURNING "contentType"
+    `;
+  const contentType = assetVersion?.contentType ?? generatedArtifacts[0]?.contentType;
+  if (!contentType) return Response.json({ error: "object_not_available", correlationId }, { status: 404 });
+  const kind = assetVersion ? "asset_version" : "generated_artifact";
+  const startedAt = performance.now();
+  let outcome = "failed";
+  return withSpan("object.download", { "pk.object.kind": kind }, async (span) => {
+    try {
+      const bytes = await storage.getObject(key);
+      const body = new ArrayBuffer(bytes.byteLength);
+      new Uint8Array(body).set(bytes);
+      outcome = "served";
+      addCounter("pk.object.download.bytes", bytes.byteLength, { kind });
+      return new Response(body, {
+        headers: {
+          "content-type": contentType,
+          "cache-control": "private, max-age=300",
+          "x-content-type-options": "nosniff",
+          "x-correlation-id": correlationId
+        }
+      });
+    } finally {
+      span.setAttribute("pk.object.download.outcome", outcome);
+      addCounter("pk.object.downloads", 1, { kind, outcome });
+      recordHistogram("pk.object.download.duration", (performance.now() - startedAt) / 1000, { kind, outcome });
     }
   });
 }

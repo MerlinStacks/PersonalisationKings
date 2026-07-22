@@ -1,6 +1,5 @@
 import { prisma } from "@personalise-kings/db";
 import { notFound, ok } from "../../../../../lib/api";
-import { writeAuditEvent } from "../../../../../lib/audit";
 import { requirePermission } from "../../../../../lib/rbac";
 import { requireSameOrigin } from "../../../../../lib/same-origin";
 import { rotateStoreSigningKey } from "../../../../../lib/store-signing-keys";
@@ -26,15 +25,7 @@ export async function POST(request: Request, { params }: Readonly<{ params: Prom
   const access = await requirePermission("manage_store");
   if (access.error) return access.error;
   const { storeId } = await params;
-  const rotated = await rotateStoreSigningKey(storeId, access.session.merchantId);
+  const rotated = await rotateStoreSigningKey(storeId, access.session.merchantId, access.session.userId);
   if (!rotated) return notFound("Store not found");
-  await writeAuditEvent({
-    merchantId: access.session.merchantId,
-    actorUserId: access.session.userId,
-    action: rotated.previousKeyId ? "store.signing_key_rotated" : "store.signing_key_created",
-    targetType: "Store",
-    targetId: storeId,
-    metadata: { keyId: rotated.signingKey.keyId, previousKeyId: rotated.previousKeyId }
-  });
   return ok({ keyId: rotated.signingKey.keyId, secret: rotated.secret }, { status: 201, headers: { "cache-control": "no-store" } });
 }

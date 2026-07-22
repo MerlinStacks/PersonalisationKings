@@ -64,6 +64,48 @@ jobs:
           severity: HIGH,CRITICAL
           exit-code: "1"
 
+  containers:
+    name: Container scan (${{ matrix.name }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: application
+            target: runtime
+            image: personalise-kings-application:scan
+          - name: proof-worker
+            target: proof
+            image: personalise-kings-proof-worker:scan
+          - name: postgres
+            target: ""
+            image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Build application image
+        if: matrix.target != ''
+        run: docker build --target "${{ matrix.target }}" --tag "${{ matrix.image }}" .
+      - name: Pull infrastructure image
+        if: matrix.target == ''
+        run: docker pull "${{ matrix.image }}"
+      - name: Scan image
+        uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8 # v0.33.1
+        with:
+          scan-type: image
+          image-ref: ${{ matrix.image }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+      - name: Generate image SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          image: ${{ matrix.image }}
+          format: spdx-json
+          output-file: ${{ matrix.name }}.spdx.json
+          upload-artifact: true
+          artifact-name: ${{ matrix.name }}-image-sbom
+
   sbom:
     name: Generate SBOM
     runs-on: ubuntu-24.04

@@ -42,9 +42,15 @@ Phase 0 production-export validation still needs the real printer/RIP details be
 
 `CI` is the merge and release correctness gate. It installs the committed Bun lockfile, generates and validates Prisma, deploys every migration to a clean PostgreSQL 16 service, validates Compose and connector syntax, then runs all workspace typechecks, tests, and production builds.
 
+Database integration tests are enabled only in CI with `PK_RUN_DATABASE_INTEGRATION_TESTS=true`. They use isolated merchant fixtures on the migrated PostgreSQL service and verify queue compare-and-set concurrency, audit atomicity, exhausted-state repair, missing-proof idempotency, and invalid-preview rejection. Local runs skip these tests unless an explicitly disposable migrated database is configured.
+
 `Security` runs on pull requests, protected-branch pushes, a weekly schedule, and manual dispatch. It performs Bun and pull-request dependency audits, full-history secret scanning, Trivy infrastructure configuration scanning, and uploads an SPDX JSON software bill of materials. All third-party workflow actions are commit-SHA pinned; Dependabot proposes grouped weekly action updates.
 
-Configure branch protection for `main` and `develop` to require `Validate workspace` plus every applicable `Security` job. GitHub secret scanning and push protection must also be enabled in repository settings. See [`docs/DEPENDENCY_POLICY.md`](docs/DEPENDENCY_POLICY.md) for supported runtimes, update cadence, vulnerability exceptions, and the container-image gate that activates with production Dockerfiles.
+Configure branch protection for `main` and `develop` to require `Validate workspace` plus every applicable `Security` job. GitHub secret scanning and push protection must also be enabled in repository settings. See [`docs/DEPENDENCY_POLICY.md`](docs/DEPENDENCY_POLICY.md) for supported runtimes, update cadence, vulnerability exceptions, and the mandatory container-image gate.
+
+## Production Deployment
+
+The initial single-host production topology is defined in `compose.production.yml`. It uses digest-pinned Bun and PostgreSQL images, a one-shot migration gate, loopback-only HTTP bindings, non-root application containers, a shared durable object volume, and a separate proof-worker image containing the pinned Chromium revision. Follow [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) for secrets, reverse proxy, rollout, persistence, and scaling constraints, and [`docs/BACKUP_AND_RESTORE.md`](docs/BACKUP_AND_RESTORE.md) for PITR and mandatory restore drills.
 
 ## Local Object Uploads
 
@@ -62,13 +68,25 @@ Saving a customisation now generates a deterministic revision-bound SVG preview 
 
 The separate proof worker claims PostgreSQL-backed jobs and renders those self-contained previews to PNG with pinned Playwright Chromium. Browser network access is blocked, dimensions and generated SVG structure are validated, interrupted claims recover after 15 minutes, and temporary failures retry with capped exponential backoff. Start it with `bun run worker:proof`.
 
+The maintenance worker reconciles malformed, stale, and exhausted proof/deletion leases in bounded batches with compare-and-set updates and audit events. It recreates missing proof work only when an accepted tenant-bound SVG preview already exists. Print jobs, webhook inbox anomalies, and the platform outbox remain observation-only until their production lease or dispatch contracts are implemented; reconciliation never bypasses the Phase 0 render gate or asserts backup deletion.
+
+Generated production-file bytes use the merchant's configured retention period once their attempt is finished and print job is terminal. Cleanup uses durable retry claims, blocks new downloads while deletion is ambiguous, waits for active signed-download leases, and retains artifact metadata, checksum, preflight result, output profile, and audit history after bytes expire. Live byte deletion never asserts that backup copies have rotated. Generic asset uploads cannot create production artifacts while the Phase 0 exporter remains gated.
+
+Owners and production operators can place reasoned, audited artifact retention holds from the Artifacts page. Holds may expire at a specified time or remain indefinite for disputes, reprints, or legal obligations. An active hold atomically blocks cleanup; releasing or replacing an expired hold never restores bytes that have already expired.
+
+The maintenance worker independently records merchant-scoped artifact cleanup checks and deduplicated operational alerts in PostgreSQL. The Operations page exposes current and resolved conditions plus recent check correlations; owners and production operators can acknowledge alerts, while auditors have read-only access. Acknowledgement is audited and does not resolve the condition. Structured worker events are emitted as bounded one-line JSON with validated correlation IDs.
+
+Optional out-of-band alert delivery uses a durable PostgreSQL queue for immutable open, escalation, acknowledgement, resolution, and reopen transitions. Configure `PK_OPERATIONS_ALERT_WEBHOOK_URL` and `PK_OPERATIONS_ALERT_WEBHOOK_SECRET` together. Deliveries use public-address-pinned HTTPS without redirects, stable idempotency keys, signed timestamps and identity headers, claim-fenced retries, and terminal handling for permanent HTTP client errors.
+
+Optional OpenTelemetry OTLP/HTTP export is enabled for the API, admin, maintenance worker, proof worker, and render worker by setting `OTEL_EXPORTER_OTLP_ENDPOINT`. API requests continue W3C trace context as server spans; domain and background boundaries emit spans and low-cardinality request, inbox, outbox, artifact-download, job outcome, duration, cleanup, operational-check, deletion, and alert-delivery metrics. Without an endpoint, telemetry remains a no-op while JSON logs and PostgreSQL operational checks continue unchanged.
+
 Install the pinned proof browser and its Linux libraries on worker hosts with `bunx playwright install --with-deps chromium`. Container images should run that installation during the image build and keep the resulting Playwright browser revision aligned with `apps/worker-proof/package.json`; production should not download a browser at process startup.
 
 On touch screens, two pointers can scale and rotate a selected layer when those controls are enabled by its immutable design policy. Gesture output uses the same bounded permille scale and milli-degree rotation stored in the canonical scene graph.
 
 WooCommerce cart lines now expose an edit link that reopens the latest eligible customisation revision. Saving appends a new immutable revision and replaces only that cart line's opaque reference through a nonce-protected same-origin request. The reference is resolved from the WooCommerce cart session rather than exposed in the edit URL.
 
-The Product Mappings page can create, reassign, activate, and deactivate WooCommerce product or variation mappings. A blank variation ID is an all-variants fallback; an exact variation mapping takes precedence, and an inactive exact mapping can explicitly disable the fallback. The connector performs a signed lookup before rendering a variable-product iframe.
+The Product Mappings page can create, reassign, activate, and deactivate WooCommerce product or variation mappings. A blank variation ID is an all-variants fallback; an exact variation mapping takes precedence, and an inactive exact mapping can explicitly disable the fallback. The connector performs a signed lookup before rendering a variable-product iframe and durably snapshots successful mapping requirements. During an API or configuration outage, products previously confirmed as mapped cannot bypass required personalisation, while exact variants previously confirmed as unmapped remain purchasable.
 
 WooCommerce connector `0.8.0` supports classic before-cart placement, mapped-product gallery replacement, a native full-screen modal, and template-controlled placement. Block themes can insert the PersonaliseKings Customiser block; classic templates can use `[personalise_kings_customiser]` or `personalise_kings_render_customiser()`. Rendering is deduplicated if a theme invokes more than one adapter.
 
@@ -79,6 +97,8 @@ API JSON bodies are streamed through route-specific byte limits before parsing, 
 Deletion Requests execute live erasure for tenant-owned customer upload assets and versions. The maintenance worker scans canonical scenes and snapshots for exact references, blocks design- or order-bound artwork, archives affected unordered sessions, cancels proof work, removes embedded SVG/PNG derivatives and source objects, then deletes live metadata. Requests remain `live_deleted` until an operator separately confirms external backup rotation; backup restoration procedures must replay the external erasure ledger to prevent resurrection.
 
 Admin authentication uses opaque database sessions rather than self-contained cookies. A valid password creates only a ten-minute pending session; users must enroll or verify a TOTP authenticator before the token is rotated into an eight-hour authenticated session. TOTP steps cannot be replayed, recovery codes are high-entropy and single-use, role changes revoke active sessions, and Settings lists sessions for individual or bulk revocation. Configure `PK_ADMIN_MFA_ENCRYPTION_KEY` and `PK_ADMIN_RECOVERY_CODE_PEPPER` before production deployment.
+
+Server processes validate production configuration before binding ports or polling queues. Production requires an explicit `NODE_ENV`, exact HTTPS service origins, an absolute storage path, canonical 32-byte AES keys, independently generated signing secrets of at least 32 bytes, and no placeholder or reused values. The demonstration seed is explicitly development-only and cannot reset an existing owner password.
 
 Store connector signing credentials are versioned independently from WooCommerce REST credentials. Creating or rotating a key returns its plaintext secret once, retires the previous key for a controlled overlap, and leaves durable outbox event identities unchanged because delivery signs with the plugin's current atomic credential snapshot. Install the replacement in WooCommerce before revoking the retired key. Connector `0.10.0` migrates a complete legacy key/secret pair into one non-autoloaded option and never renders the stored secret back into settings HTML.
 

@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@personalise-kings/auth": "workspace:*",
+    "@personalise-kings/config": "workspace:*",
     "@prisma/client": "^6.19.0"
   },
   "devDependencies": {

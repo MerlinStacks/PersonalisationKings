@@ -22,10 +22,12 @@
 - Gitleaks scans full Git history for committed credentials.
 - Trivy scans repository infrastructure configuration.
 - Syft generates an SPDX JSON SBOM as a workflow artifact.
+- Trivy rejects high or critical fixed vulnerabilities in the application, proof-worker, and PostgreSQL images.
+- Syft generates an additional SPDX JSON SBOM for every scanned image surface.
 - Enable GitHub secret scanning and push protection in repository settings where available.
 
 ## Exceptions
 
 Document a temporary exception in the pull request with the advisory identifier, affected surface, compensating control, owner, and expiry date. Do not suppress an advisory indefinitely without a reviewed risk decision.
 
-Container image scanning becomes a required release gate when production Dockerfiles are added. Production image references must then be digest-pinned and SBOMs attached to releases.
+Container image scanning is a required release gate. Base and infrastructure image references are digest-pinned; reviewed updates must refresh their digests. Retain the generated image SBOM artifacts with each release.

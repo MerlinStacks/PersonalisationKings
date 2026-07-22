@@ -1,4 +1,5 @@
 import { prisma } from "@personalise-kings/db";
+import { addCounter } from "@personalise-kings/observability/telemetry";
 import { badRequest, notFound, ok, toInputJson } from "../../../../../lib/api";
 import { writeAuditEvent } from "../../../../../lib/audit";
 import { requirePermission } from "../../../../../lib/rbac";
@@ -43,17 +44,20 @@ export async function POST(request: Request, { params }: Readonly<{ params: Prom
         correlationId: `manual-regenerate-${printJob.id}-${Date.now()}`
       }
     });
+    await writeAuditEvent({
+      merchantId: access.session.merchantId,
+      actorUserId: access.session.userId,
+      action: "print_job.regenerate",
+      targetType: "PrintJob",
+      targetId: printJob.id,
+      metadata: { previousStatus: existing.status, retryCount: printJob.retryCount }
+    }, tx);
 
     return printJob;
   });
-
-  await writeAuditEvent({
-    merchantId: access.session.merchantId,
-    actorUserId: access.session.userId,
-    action: "print_job.regenerate",
-    targetType: "PrintJob",
-    targetId: updated.id,
-    metadata: { previousStatus: existing.status, retryCount: updated.retryCount }
+  addCounter("pk.outbox.events.created", 1, {
+    event_type: "print_job.regeneration_requested",
+    producer: "admin_regeneration"
   });
 
   return ok(updated);

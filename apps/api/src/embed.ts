@@ -484,7 +484,7 @@ function storeOrigin(storeUrl: string) {
 
 export function customiserOrigin() {
   const configured = process.env.PK_CUSTOMISER_URL;
-  if (!configured) return process.env.NODE_ENV === "production" ? null : "http://localhost:3001";
+  if (!configured) return process.env.NODE_ENV === "development" || process.env.NODE_ENV === "test" ? "http://localhost:3001" : null;
   try { return new URL(configured).origin; } catch { return null; }
 }
 
@@ -639,7 +639,7 @@ function isPrismaTransactionConflict(error: unknown) {
 function embedTokenSecret() {
   const configured = process.env.PK_EMBED_TOKEN_SECRET;
   if (configured) return configured;
-  return process.env.NODE_ENV === "production" ? null : "dev-embed-secret-change-me";
+  return process.env.NODE_ENV === "development" || process.env.NODE_ENV === "test" ? "dev-embed-secret-change-me" : null;
 }
 
 function customisationTtlSeconds() {

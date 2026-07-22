@@ -1,0 +1,15 @@
+.git
+.github
+.env
+.env.*
+!.env.example
+node_modules
+**/.next
+**/dist
+coverage
+storage
+test-results
+playwright-report
+sbom*.json
+*.spdx.json
+*.log

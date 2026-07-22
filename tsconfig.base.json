@@ -14,6 +14,7 @@
     "baseUrl": ".",
     "paths": {
       "@personalise-kings/auth": ["packages/auth/src/index.ts"],
+      "@personalise-kings/config/server": ["packages/config/src/server.ts"],
       "@personalise-kings/connector-contracts": ["packages/connector-contracts/src/index.ts"],
       "@personalise-kings/db": ["packages/db/src/index.ts"],
       "@personalise-kings/observability": ["packages/observability/src/index.ts"],

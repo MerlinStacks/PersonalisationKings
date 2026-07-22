@@ -12,6 +12,7 @@ const navItems: ReadonlyArray<readonly [string, string, Permission?]> = [
   ["Orders", "/orders", "view_order"],
   ["Print Jobs", "/print-jobs", "view_order"],
   ["Artifacts", "/artifacts", "download_artifact"],
+  ["Operations", "/operations", "view_operations"],
   ["Staff", "/staff", "manage_staff"],
   ["Deletion", "/deletion-requests", "delete_asset"],
   ["Audit", "/audit", "view_audit"],

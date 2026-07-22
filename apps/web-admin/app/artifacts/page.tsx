@@ -1,5 +1,6 @@
 import { prisma } from "@personalise-kings/db";
 import { ResourceTable } from "../../components/resource-table";
+import { ArtifactRetentionManager } from "../../components/artifact-retention-manager";
 import { safeQuery } from "../../lib/data";
 import { formatDate } from "../../lib/format";
 import { requirePermission } from "../../lib/rbac";
@@ -26,7 +27,7 @@ export default async function ArtifactsPage() {
         <div>
           <p className="eyebrow">Production files</p>
           <h1>Artifacts</h1>
-          <p>Generated files are immutable records with checksums, preflight status, output profile version, and audited download access.</p>
+          <p>Generated file metadata remains immutable after retained bytes expire. Checksums, preflight status, output profile version, and download history remain auditable.</p>
         </div>
       </header>
       <ResourceTable
@@ -36,11 +37,14 @@ export default async function ArtifactsPage() {
           { header: "Order", render: (artifact) => artifact.printJobAttempt.printJob.order.externalOrderNumber ?? artifact.printJobAttempt.printJob.order.externalOrderId },
           { header: "Type", render: (artifact) => artifact.artifactType },
           { header: "Preflight", render: (artifact) => <span className="status-pill">{artifact.preflightStatus}</span> },
+          { header: "Bytes", render: (artifact) => <span className="status-pill">{artifact.bytesDeletedAt ? "expired" : artifact.cleanupClaimedAt ? "cleanup pending" : "available"}</span> },
+          { header: "Hold", render: (artifact) => artifact.retentionHoldAt && (!artifact.retentionHoldUntil || artifact.retentionHoldUntil > new Date()) ? (artifact.retentionHoldUntil ? `Until ${formatDate(artifact.retentionHoldUntil)}` : "Indefinite") : artifact.retentionHoldAt ? "Expired" : "None" },
           { header: "Output Profile", render: (artifact) => `v${artifact.outputProfileVersion.version}` },
           { header: "Checksum", render: (artifact) => artifact.checksumSha256.slice(0, 16) },
           { header: "Created", render: (artifact) => formatDate(artifact.createdAt) }
         ]}
       />
+      <ArtifactRetentionManager artifacts={artifacts} />
     </main>
   );
 }

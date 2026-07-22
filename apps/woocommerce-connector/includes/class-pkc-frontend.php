@@ -11,6 +11,8 @@ defined( 'ABSPATH' ) || exit;
  * Adds a hosted customiser placeholder to product pages.
  */
 class PKC_Frontend {
+    private const MAPPING_SNAPSHOT_META = '_pkc_mapping_requirements_v1';
+
     private bool $rendered = false;
 
     /**
@@ -131,7 +133,7 @@ class PKC_Frontend {
         $api_url = rtrim( (string) get_option( PKC_Settings::OPTION_API_URL, '' ), '/' );
         $store_id = (string) get_option( PKC_Settings::OPTION_STORE_ID, '' );
 
-        if ( '' === $webapp_url || '' === $api_url || '' === $store_id ) {
+        if ( ! PKC_Settings::is_valid_endpoint_url( $webapp_url ) || ! PKC_Settings::is_valid_endpoint_url( $api_url ) || '' === $store_id ) {
             return;
         }
 
@@ -186,6 +188,9 @@ class PKC_Frontend {
      * @return array{embed_token:string,price_modifier_minor:int}|null
      */
     private function request_embed_token( string $api_url, string $store_id, string $parent_origin, string $product_id, string $variant_id, string $correlation_id ): ?array {
+        if ( ! PKC_Settings::is_valid_endpoint_url( $api_url ) ) {
+            return null;
+        }
         $body = wp_json_encode(
             array_filter(
                 array(
@@ -208,10 +213,12 @@ class PKC_Frontend {
         $key_id = $credential['key_id'];
         $secret = $credential['secret'];
 
-        $response = wp_remote_post(
+        $response = wp_safe_remote_post(
             $api_url . '/v1/customiser/embed-token',
             array(
                 'timeout' => 8,
+                'redirection' => 0,
+                'limit_response_size' => 65536,
                 'headers' => array(
                     'Content-Type'     => 'application/json',
                     'X-Correlation-ID' => $correlation_id,
@@ -263,6 +270,9 @@ class PKC_Frontend {
      * @return array{mapped:bool,price_modifier_minor:int}|null
      */
     private function lookup_product_mapping( string $api_url, string $store_id, string $product_id, string $variant_id, string $correlation_id ): ?array {
+        if ( ! PKC_Settings::is_valid_endpoint_url( $api_url ) ) {
+            return null;
+        }
         $cached = get_transient( $this->mapping_cache_key( $store_id, $product_id, $variant_id ) );
         if ( is_array( $cached ) && isset( $cached['mapped'], $cached['price_modifier_minor'] ) ) {
             return array(
@@ -287,10 +297,12 @@ class PKC_Frontend {
         $key_id = $credential['key_id'];
         $secret = $credential['secret'];
 
-        $response = wp_remote_post(
+        $response = wp_safe_remote_post(
             $api_url . '/v1/customiser/mapping-lookup',
             array(
                 'timeout' => 8,
+                'redirection' => 0,
+                'limit_response_size' => 65536,
                 'headers' => array(
                     'Content-Type'     => 'application/json',
                     'X-Correlation-ID' => $correlation_id,
@@ -330,6 +342,63 @@ class PKC_Frontend {
             $this->mapping_cache_key( $store_id, $product_id, $variant_id ),
             array( 'mapped' => $mapped, 'price_modifier_minor' => $price_modifier_minor ),
             5 * MINUTE_IN_SECONDS
+        );
+        $this->store_mapping_snapshot( $store_id, $product_id, $variant_id, $mapped );
+    }
+
+    /**
+     * Persist the latest authoritative mapping requirement independently of transient caches.
+     *
+     * @param string $store_id   Store ID.
+     * @param string $product_id Product ID.
+     * @param string $variant_id Variation ID or an empty string.
+     * @param bool   $mapped     Whether personalisation is required.
+     */
+    private function store_mapping_snapshot( string $store_id, string $product_id, string $variant_id, bool $mapped ): void {
+        $post_id = absint( $product_id );
+        if ( 0 === $post_id || '' === $store_id ) {
+            return;
+        }
+        $snapshot = get_post_meta( $post_id, self::MAPPING_SNAPSHOT_META, true );
+        if ( ! is_array( $snapshot ) || (string) ( $snapshot['store_id'] ?? '' ) !== $store_id ) {
+            $snapshot = array( 'store_id' => $store_id, 'variants' => array() );
+        }
+        $variants = isset( $snapshot['variants'] ) && is_array( $snapshot['variants'] ) ? $snapshot['variants'] : array();
+        $variants[ '' === $variant_id ? '_default' : $variant_id ] = $mapped;
+        $snapshot['variants'] = $variants;
+        $snapshot['updated_at'] = time();
+        update_post_meta( $post_id, self::MAPPING_SNAPSHOT_META, $snapshot );
+    }
+
+    /**
+     * Resolve the last known mapping requirement, preserving exact-variant precedence.
+     *
+     * @param mixed  $snapshot   Persisted mapping snapshot.
+     * @param string $store_id   Current store ID, or empty when configuration is incomplete.
+     * @param string $variant_id Variation ID or an empty string.
+     */
+    public static function snapshot_requires_mapping( $snapshot, string $store_id, string $variant_id ): bool {
+        if ( ! is_array( $snapshot ) || ! isset( $snapshot['variants'] ) || ! is_array( $snapshot['variants'] ) ) {
+            return false;
+        }
+        $snapshot_store_id = (string) ( $snapshot['store_id'] ?? '' );
+        if ( '' !== $store_id && ! hash_equals( $snapshot_store_id, $store_id ) ) {
+            return false;
+        }
+        if ( '' !== $variant_id && array_key_exists( $variant_id, $snapshot['variants'] ) ) {
+            return true === $snapshot['variants'][ $variant_id ];
+        }
+        return isset( $snapshot['variants']['_default'] ) && true === $snapshot['variants']['_default'];
+    }
+
+    /**
+     * Return whether this product was last confirmed to require personalisation.
+     */
+    private function known_mapping_required( int $product_id, int $variation_id, string $store_id ): bool {
+        return self::snapshot_requires_mapping(
+            get_post_meta( $product_id, self::MAPPING_SNAPSHOT_META, true ),
+            $store_id,
+            $variation_id > 0 ? (string) $variation_id : ''
         );
     }
 
@@ -411,13 +480,18 @@ class PKC_Frontend {
 
         $api_url = rtrim( (string) get_option( PKC_Settings::OPTION_API_URL, '' ), '/' );
         $store_id = (string) get_option( PKC_Settings::OPTION_STORE_ID, '' );
-        if ( '' === $api_url || '' === $store_id ) {
+        $reference = isset( $_POST['pk_customisation_reference'] ) ? sanitize_text_field( wp_unslash( $_POST['pk_customisation_reference'] ) ) : '';
+        $known_required = $this->known_mapping_required( $product_id, $variation_id, $store_id );
+        if ( ! PKC_Settings::is_valid_endpoint_url( $api_url ) || '' === $store_id ) {
+            if ( $known_required || $this->is_valid_reference( $reference ) ) {
+                wc_add_notice( __( 'Personalisation could not be verified. Please try again.', 'personalise-kings-connector' ), 'error' );
+                return false;
+            }
             return $passed;
         }
         $mapping = $this->lookup_product_mapping( $api_url, $store_id, (string) $product_id, $variation_id > 0 ? (string) $variation_id : '', wp_generate_uuid4() );
-        $reference = isset( $_POST['pk_customisation_reference'] ) ? sanitize_text_field( wp_unslash( $_POST['pk_customisation_reference'] ) ) : '';
         if ( null === $mapping ) {
-            if ( $this->is_valid_reference( $reference ) ) {
+            if ( $known_required || $this->is_valid_reference( $reference ) ) {
                 wc_add_notice( __( 'Personalisation could not be verified. Please try again.', 'personalise-kings-connector' ), 'error' );
                 return false;
             }

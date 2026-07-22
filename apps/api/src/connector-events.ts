@@ -1,9 +1,35 @@
 import { prisma } from "@personalise-kings/db";
 import type { ConnectorEventEnvelope } from "@personalise-kings/connector-contracts";
+import { addCounter, recordHistogram, withSpan } from "@personalise-kings/observability/telemetry";
 import { Prisma } from "@prisma/client";
 import { toInputJson } from "./json";
 
 export async function ingestConnectorEvent(event: ConnectorEventEnvelope, correlationId: string) {
+  const startedAt = performance.now();
+  let outcome = "failed";
+  return withSpan("connector.inbox.ingest", { "pk.connector.event_type": event.event_type }, async (span) => {
+    try {
+      const result = await ingestConnectorEventTransaction(event, correlationId);
+      outcome = result.status;
+      if (result.status === "accepted") {
+        addCounter("pk.outbox.events.created", 1, {
+          event_type: connectorOutboxEventType(event),
+          producer: "connector"
+        });
+      }
+      return result;
+    } finally {
+      span.setAttribute("pk.connector.inbox.outcome", outcome);
+      addCounter("pk.connector.inbox.events", 1, { event_type: event.event_type, outcome });
+      recordHistogram("pk.connector.inbox.duration", (performance.now() - startedAt) / 1000, {
+        event_type: event.event_type,
+        outcome
+      });
+    }
+  });
+}
+
+async function ingestConnectorEventTransaction(event: ConnectorEventEnvelope, correlationId: string) {
   const store = await prisma.store.findUnique({ where: { id: event.store_id } });
   if (!store || store.connectionStatus !== "connected") return { status: "unknown_store" as const };
 
@@ -284,11 +310,7 @@ export async function ingestConnectorEvent(event: ConnectorEventEnvelope, correl
     await tx.outboxEvent.create({
       data: {
         merchantId: store.merchantId,
-        eventType: event.event_type === "order.paid" && !["cancelled", "refunded"].includes(event.payload.order_status)
-          ? "print_jobs.requested"
-          : event.event_type === "order.cancelled" || event.event_type === "order.refunded"
-            ? "print_jobs.lifecycle_review"
-            : "order.synced",
+        eventType: connectorOutboxEventType(event),
         aggregateType: "ExternalOrder",
         aggregateId: externalOrder.id,
         payload: toInputJson({ externalOrderId: externalOrder.id, eventId: event.event_id }),
@@ -301,6 +323,16 @@ export async function ingestConnectorEvent(event: ConnectorEventEnvelope, correl
     });
     return { status: "accepted" as const, deliveryId: delivery.id, orderId: externalOrder.id };
   }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+}
+
+export function connectorOutboxEventType(event: Pick<ConnectorEventEnvelope, "event_type" | "payload">) {
+  if (event.event_type === "order.paid" && !["cancelled", "refunded"].includes(event.payload.order_status)) {
+    return "print_jobs.requested" as const;
+  }
+  if (event.event_type === "order.cancelled" || event.event_type === "order.refunded") {
+    return "print_jobs.lifecycle_review" as const;
+  }
+  return "order.synced" as const;
 }
 
 export function printJobLifecycleTransition(

@@ -1,0 +1,17 @@
+{
+  "name": "@personalise-kings/config",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./server": "./src/server.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.2",
+    "vitest": "^4.0.15"
+  }
+}

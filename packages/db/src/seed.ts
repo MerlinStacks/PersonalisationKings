@@ -1,15 +1,14 @@
 import { encryptStoreWebhookSecret, hashPassword } from "@personalise-kings/auth";
+import { assertDemoSeedAllowed } from "@personalise-kings/config/server";
 import { PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();
 
 async function main() {
+  assertDemoSeedAllowed();
   const demoPasswordHash = await hashPassword("password123");
-  if (process.env.NODE_ENV === "production" && (!process.env.PK_CONNECTOR_SECRET_ENCRYPTION_KEY || !process.env.PK_DEMO_CONNECTOR_SECRET)) {
-    throw new Error("Production seed requires explicit connector encryption and demo signing secrets");
-  }
-  const connectorEncryptionKey = process.env.PK_CONNECTOR_SECRET_ENCRYPTION_KEY ?? Buffer.alloc(32, 1).toString("base64");
-  const connectorSecret = process.env.PK_DEMO_CONNECTOR_SECRET ?? "dev-connector-secret-change-me";
+  const connectorEncryptionKey = process.env.PK_CONNECTOR_SECRET_ENCRYPTION_KEY || Buffer.alloc(32, 1).toString("base64");
+  const connectorSecret = process.env.PK_DEMO_CONNECTOR_SECRET || "dev-connector-secret-change-me";
   const demoKeyId = "demo-key";
   const encryptedDemoSecret = encryptStoreWebhookSecret(connectorSecret, connectorEncryptionKey, "seed-store", demoKeyId);
 
@@ -35,7 +34,7 @@ async function main() {
 
   await prisma.staffUser.upsert({
     where: { merchantId_email: { merchantId: merchant.id, email: "owner@example.test" } },
-    update: { passwordHash: demoPasswordHash },
+    update: {},
     create: {
       merchantId: merchant.id,
       email: "owner@example.test",

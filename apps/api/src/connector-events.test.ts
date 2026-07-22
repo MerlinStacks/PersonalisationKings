@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isStaleOrderEvent, printJobLifecycleTransition } from "./connector-events";
+import { connectorOutboxEventType, isStaleOrderEvent, printJobLifecycleTransition } from "./connector-events";
 
 describe("print job lifecycle transitions", () => {
   it.each(["queued", "failed"] as const)("cancels %s work before production completes", (status) => {
@@ -37,5 +37,20 @@ describe("order event watermark", () => {
       "order.updated",
       new Date("2026-07-18T12:00:01.000Z")
     )).toBe(false);
+  });
+});
+
+describe("connector outbox events", () => {
+  const event = (event_type: "order.paid" | "order.updated" | "order.cancelled" | "order.refunded", order_status: string) => ({
+    event_type,
+    payload: { order_status }
+  }) as Parameters<typeof connectorOutboxEventType>[0];
+
+  it("normalizes lifecycle work to bounded event types", () => {
+    expect(connectorOutboxEventType(event("order.paid", "processing"))).toBe("print_jobs.requested");
+    expect(connectorOutboxEventType(event("order.paid", "refunded"))).toBe("order.synced");
+    expect(connectorOutboxEventType(event("order.cancelled", "cancelled"))).toBe("print_jobs.lifecycle_review");
+    expect(connectorOutboxEventType(event("order.refunded", "partially-refunded"))).toBe("print_jobs.lifecycle_review");
+    expect(connectorOutboxEventType(event("order.updated", "processing"))).toBe("order.synced");
   });
 });

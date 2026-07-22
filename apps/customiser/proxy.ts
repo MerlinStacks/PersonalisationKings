@@ -37,7 +37,7 @@ export function allowedParentOrigin(value: string | null) {
     const url = new URL(value);
     if (url.origin !== value || url.username || url.password) return null;
     if (url.protocol === "https:") return url.origin;
-    if (process.env.NODE_ENV !== "production" && url.protocol === "http:" && ["localhost", "127.0.0.1", "::1"].includes(url.hostname)) return url.origin;
+    if (process.env.NODE_ENV === "development" && url.protocol === "http:" && ["localhost", "127.0.0.1", "::1"].includes(url.hostname)) return url.origin;
     return null;
   } catch {
     return null;
@@ -45,7 +45,7 @@ export function allowedParentOrigin(value: string | null) {
 }
 
 function configuredApiOrigin() {
-  const configured = process.env.PK_API_URL ?? (process.env.NODE_ENV === "production" ? null : "http://localhost:3002");
+  const configured = process.env.PK_API_URL ?? (process.env.NODE_ENV === "development" ? "http://localhost:3002" : null);
   if (!configured) return "'none'";
   try { return new URL(configured).origin; } catch { return "'none'"; }
 }

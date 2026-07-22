@@ -3,6 +3,7 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   transpilePackages: [
     "@personalise-kings/auth",
+    "@personalise-kings/config",
     "@personalise-kings/db",
     "@personalise-kings/render-schema",
     "@personalise-kings/storage",

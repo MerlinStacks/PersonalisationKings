@@ -132,6 +132,21 @@
 - Updated the WooCommerce connector scaffold to version 0.10.0 and removed the remaining production embed-token development-secret fallback.
 - Added a PostgreSQL-backed GitHub Actions correctness gate covering frozen dependency installation, Prisma generation/validation, clean-database migration deployment, Compose validation, connector syntax, workspace typechecks/tests, and production builds.
 - Added SHA-pinned dependency review, Bun vulnerability auditing, full-history secret scanning, Trivy configuration scanning, SPDX JSON SBOM generation, weekly GitHub Actions updates, and a documented runtime/update/exception policy.
+- Added digest-pinned multi-stage production images for the Bun application surface and Playwright proof worker, with non-root runtime execution and build-time installation of the exact Chromium revision.
+- Added single-host production orchestration with a migration gate, PostgreSQL health dependency, loopback-only HTTP bindings, service health checks, hardened application containers, and shared durable object storage.
+- Added mandatory application, proof-worker, and PostgreSQL image vulnerability scans and per-image SPDX SBOM artifacts.
+- Documented TLS reverse-proxy boundaries, cache/rate-limit constraints, secret handling, rollout/rollback rules, persistent-volume requirements, PostgreSQL PITR/WAL coverage, object backups, erasure replay, and quarterly isolated restore drills.
+- Added bounded PostgreSQL queue reconciliation with claim-fenced deletion preparation, stale/null/exhausted proof and deletion repair, conflict-safe missing-proof recreation from valid immutable previews, audit events, queue anomaly reporting, and claim lookup indexes.
+- Added CI-only migrated-PostgreSQL integration coverage for proof/deletion repair, concurrent compare-and-set fencing, audit creation, missing-proof idempotency, malformed preview rejection, and preservation of backup-erasure boundaries.
+- Added retention-driven generated-artifact byte cleanup with durable stale-recoverable claims, indefinite bounded retries, signed-download leases, tenant-bound storage keys and relation chains, retained immutable metadata, explicit availability UI/API state, and backup-safe audit evidence.
+- Added tenant-scoped legal/operational artifact retention holds with optional expiry, dedicated owner/production permissions, atomic cleanup exclusion, reasoned audit events, expiry-aware replacement, and admin controls.
+- Added collector-independent operational monitoring with validated correlations, bounded one-line JSON logging, independent artifact-cleanup checks, capped SQL metrics, PostgreSQL check history, deduplicated alert lifecycle, audited acknowledgement, role-scoped Operations UI, and 30-day history pruning.
+- Added durable signed operational-alert webhook delivery for immutable open/escalate/acknowledge/resolve/reopen transitions, with versioned idempotency, public-DNS validation and address pinning, TLS hostname verification, replay-bound signatures, database-clock claims, stale recovery, bounded retries, and terminal permanent-failure visibility.
+- Added optional OpenTelemetry OTLP/HTTP tracing and metrics for API, admin, connector inbox/outbox, artifact download, maintenance, proof, and render boundaries, including W3C server-context propagation, low-cardinality route/task/job/outcome instruments, serialized SDK startup, active-claim draining, graceful flush, and no-op operation when no collector is configured.
+- Closed privileged admin mutation audit gaps, enforced design-management RBAC before asset promotion, added capability-issuance audits, and made database mutation/audit pairs atomic for assets, customisations, order sync, output profiles, print jobs, and connector signing keys.
+- Added centralized fail-closed production configuration validation across API, admin, customiser, and workers; blocked demonstration seeding in production, stopped seed reruns resetting owner passwords, gated insecure development behavior explicitly, rejected weak/placeholder/reused secrets and invalid origins/keys, and reduced per-container secret exposure.
+- Updated the WooCommerce connector to `0.11.0` with public-HTTPS endpoint validation, local-only HTTP exceptions, bounded signing credential validation, safe outbound requests, redirect refusal, and response-size limits.
+- Updated the WooCommerce connector to `0.12.0` with durable product/variant mapping requirement snapshots and fail-closed add-to-cart validation for previously confirmed personalised products during connector or API outages.
 
 ### Still To Do
 
@@ -139,8 +154,6 @@
 - Build and physically validate the Phase 0 production exporter fixtures before claiming UV print-file readiness.
 - Replace placeholder/demo output profile settings with confirmed printer/RIP values after Phase 0.
 - Add WebAuthn passkeys and verified forgotten-password/support recovery; TOTP MFA, one-time recovery codes, and revocable database sessions are now implemented.
-- Replace remaining dev secrets and demo defaults with configured production secrets.
-- Expand RBAC enforcement and audit coverage for downloads, regeneration, manual status changes, connection changes, and every privileged action.
 - Complete live theme/browser compatibility testing for the WooCommerce block, classic-hook, gallery-replacement, modal, shortcode, and manual placement adapters.
 - Complete full touch workflow and browser accessibility testing for the constrained customiser.
 - Add pinned Chromium golden-image comparisons for the PNG proof and later production output; geometric live-preview/proof fixtures are now covered.
@@ -148,22 +161,22 @@
 - Expand media upload validation with full decoder limits, metadata stripping, safe re-encoding, and isolated processing.
 - Add malware scanning or equivalent isolated media processing where required.
 - Extend erasure to ordered artwork only after retention eligibility is modelled, and integrate external replica/backup systems with automatic purge evidence; unordered live storage and metadata execution is now implemented.
-- Extend cleanup jobs beyond temporary uploads to previews and generated files.
+- Add WordPress-compatible connector telemetry and deploy the documented external worker-heartbeat alert before Phase 0 generated artifacts are enabled; API/admin/inbox/outbox/artifact/maintenance/proof/render OTLP coverage, bounded worker heartbeat metrics, and durable cleanup alerting are implemented.
 - Add later S3-compatible object-storage backend support.
-- Apply and test the initial PostgreSQL migration against a real local database when Docker or PostgreSQL is available.
-- Add database backup/PITR/WAL setup documentation and restore drills.
+- Execute the clean PostgreSQL migration gate in GitHub Actions and repeat it against production-like restored data before deployment; the CI service and migration command are implemented, while local execution remains blocked by the unavailable Docker daemon.
+- Configure the selected production backup tool/provider, then execute and record the first isolated PITR/object restore drill; required coverage and the drill procedure are documented.
 - Add real BullMQ/Redis dispatch while keeping PostgreSQL inbox/outbox/print job records authoritative.
-- Add queue reconciliation for stale, missing, or stuck jobs.
+- Add claim tokens and safe mutation rules for real print rendering, asynchronous webhook processing, and platform outbox dispatch; proof/deletion stale, missing, and exhausted work is reconciled, while incomplete queue contracts are observation-only.
 - Build the real render/production exporter after Phase 0 is validated.
 - Add preflight validation for spot names, output profile, colour space, dimensions, masks, layer order, and artifact checksums.
 - Add generated artifact creation from the real production exporter after Phase 0.
 - Expand failed print job review workflows and production operator controls beyond the current regeneration endpoint.
-- Add OpenTelemetry tracing/metrics/log correlation across connector, API, inbox, outbox, workers, artifacts, and admin views.
+- Complete OpenTelemetry log correlation and add dispatch/creation telemetry when the real platform outbox dispatcher and Phase 0 production artifact exporter are implemented; current API, admin, inbox/outbox creation/backlog, artifact download/cleanup, and worker boundaries are covered.
 - Replace the bounded per-process API limiter with coordinated Redis/edge limits after trusted-proxy topology is configured, and complete browser CSP/sandbox compatibility tests.
 - Add wrapping-key versioning and re-encryption tooling for `PK_CONNECTOR_SECRET_ENCRYPTION_KEY`; per-store HMAC key lookup, overlap rotation, and revocation are now implemented.
 - Expand automated tests for tenant isolation, connector signatures, duplicate events, customiser commit validation, order ingestion, print job creation, upload validation edge cases, and WooCommerce cart/order behaviour.
 - Add production Dockerfiles, then enforce digest-pinned base images, image vulnerability scanning, and release-attached SBOMs; repository CI, dependency/secret/configuration scanning, source SBOM generation, and update policy automation are implemented.
-- Add production deployment configuration, reverse proxy guidance, cache coordination, and persistent storage configuration.
+- Deploy and smoke-test the documented production topology on the target host; production Compose, reverse proxy guidance, cache coordination boundaries, persistence, and rollout procedures are implemented.
 - Add accessibility testing against WCAG 2.2 AA for admin and customiser.
 - Add private beta operational runbooks, failure simulations, monitoring, and load tests.
 - Add Shopify only after the WooCommerce flow and core production pipeline are proven.

@@ -1,0 +1,8 @@
+export const dynamic = "force-dynamic";
+
+export function GET() {
+  return Response.json(
+    { ok: true, service: "personalise-kings-customiser" },
+    { headers: { "cache-control": "no-store" } }
+  );
+}

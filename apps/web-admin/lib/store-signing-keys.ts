@@ -1,8 +1,9 @@
 import { encryptStoreWebhookSecret } from "@personalise-kings/auth";
 import { prisma } from "@personalise-kings/db";
 import { randomBytes } from "node:crypto";
+import { writeAuditEvent } from "./audit";
 
-export async function rotateStoreSigningKey(storeId: string, merchantId: string) {
+export async function rotateStoreSigningKey(storeId: string, merchantId: string, actorUserId: string) {
   const encryptionKey = process.env.PK_CONNECTOR_SECRET_ENCRYPTION_KEY;
   if (!encryptionKey) throw new Error("Connector secret encryption is not configured");
   const keyId = `pk_${randomBytes(16).toString("base64url")}`;
@@ -25,17 +26,36 @@ export async function rotateStoreSigningKey(storeId: string, merchantId: string)
       where: { id_merchantId: { id: storeId, merchantId } },
       data: { activeWebhookSigningKeyId: keyId, webhookSigningKeyId: keyId, webhookSecretEncrypted: encrypted }
     });
+    await writeAuditEvent({
+      merchantId,
+      actorUserId,
+      action: store.activeWebhookSigningKeyId ? "store.signing_key_rotated" : "store.signing_key_created",
+      targetType: "Store",
+      targetId: storeId,
+      metadata: { keyId: signingKey.keyId, previousKeyId: store.activeWebhookSigningKeyId }
+    }, tx);
     return { signingKey, previousKeyId: store.activeWebhookSigningKeyId };
   }, { isolationLevel: "Serializable" });
   return result ? { ...result, secret } : null;
 }
 
-export async function revokeRetiredSigningKey(storeId: string, merchantId: string, keyId: string) {
-  const store = await prisma.store.findFirst({ where: { id: storeId, merchantId }, select: { activeWebhookSigningKeyId: true } });
-  if (!store || store.activeWebhookSigningKeyId === keyId) return false;
-  const revoked = await prisma.storeWebhookSigningKey.updateMany({
-    where: { storeId, merchantId, keyId, retiredAt: { not: null }, revokedAt: null },
-    data: { revokedAt: new Date() }
+export async function revokeRetiredSigningKey(storeId: string, merchantId: string, keyId: string, actorUserId: string) {
+  return prisma.$transaction(async (tx) => {
+    const store = await tx.store.findFirst({ where: { id: storeId, merchantId }, select: { activeWebhookSigningKeyId: true } });
+    if (!store || store.activeWebhookSigningKeyId === keyId) return false;
+    const revoked = await tx.storeWebhookSigningKey.updateMany({
+      where: { storeId, merchantId, keyId, retiredAt: { not: null }, revokedAt: null },
+      data: { revokedAt: new Date() }
+    });
+    if (revoked.count !== 1) return false;
+    await writeAuditEvent({
+      merchantId,
+      actorUserId,
+      action: "store.signing_key_revoked",
+      targetType: "Store",
+      targetId: storeId,
+      metadata: { keyId }
+    }, tx);
+    return true;
   });
-  return revoked.count === 1;
 }

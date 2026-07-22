@@ -6,6 +6,9 @@
     "apps/*",
     "packages/*"
   ],
+  "overrides": {
+    "sharp": "0.35.3"
+  },
   "scripts": {
     "dev:services": "docker compose up -d postgres redis",
     "dev:web": "bun --filter @personalise-kings/web-admin dev",
@@ -19,6 +22,7 @@
     "test": "bun run --filter '*' test",
     "prisma:generate": "bun --filter @personalise-kings/db prisma generate --schema prisma/schema.prisma",
     "prisma:migrate": "bun --filter @personalise-kings/db prisma migrate dev --schema prisma/schema.prisma",
+    "prisma:deploy": "bun --filter @personalise-kings/db prisma migrate deploy --schema prisma/schema.prisma",
     "db:seed": "bun --filter @personalise-kings/db seed"
   },
   "devDependencies": {
