@@ -5,7 +5,7 @@ import { writeAuditEvent } from "../../../../../lib/audit";
 import { requirePermission } from "../../../../../lib/rbac";
 import { requireSameOrigin } from "../../../../../lib/same-origin";
 import { persistStoreCredential } from "../../../../../lib/store-credentials";
-import { checkWooCommerceCredentials, connectorEncryptionKey, encryptWooCommerceCredentials, normalizeWooCommerceStoreUrl } from "../../../../../lib/woocommerce";
+import { checkWooCommerceCredentials, connectorEncryptionKeys, encryptWooCommerceCredentials, normalizeWooCommerceStoreUrl } from "../../../../../lib/woocommerce";
 
 const manualCredentialSchema = z.object({
   storeId: z.string().min(1).max(200).optional(),
@@ -34,16 +34,13 @@ export async function POST(request: Request) {
   }
 
   let storeUrl: string;
-  let encryptedPayload: string;
+  let encryptionKeys: ReturnType<typeof connectorEncryptionKeys>;
   try {
     storeUrl = normalizeWooCommerceStoreUrl(requestedStore?.url ?? parsed.data.url ?? "");
-    encryptedPayload = encryptWooCommerceCredentials({
-      consumerKey: parsed.data.consumerKey,
-      consumerSecret: parsed.data.consumerSecret
-    }, connectorEncryptionKey());
+    encryptionKeys = connectorEncryptionKeys();
   } catch (error) {
     const message = error instanceof Error ? error.message : "The WooCommerce credentials could not be prepared";
-    const configurationError = message.includes("PK_CONNECTOR_SECRET_ENCRYPTION_KEY") || message.includes("base64-encoded 32-byte key");
+    const configurationError = message.includes("PK_CONNECTOR_SECRET_ENCRYPTION") || message.includes("wrapping key") || message.includes("base64-encoded 32-byte key");
     return configurationError
       ? ok({ error: "credential_storage_unavailable", message: "Store credential encryption is not configured" }, { status: 503 })
       : badRequest(message);
@@ -101,6 +98,10 @@ export async function POST(request: Request) {
           connectionStatus: "pending"
         }
       });
+    const encryptedPayload = encryptWooCommerceCredentials({
+      consumerKey: parsed.data.consumerKey,
+      consumerSecret: parsed.data.consumerSecret
+    }, encryptionKeys, access.session.merchantId, store.id);
     if (!existingStore) {
       await tx.wooCommerceAuthAttempt.updateMany({
         where: { storeId: store.id, callbackReceivedAt: null, cancelledAt: null },

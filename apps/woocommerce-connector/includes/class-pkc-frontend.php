@@ -189,6 +189,7 @@ class PKC_Frontend {
      */
     private function request_embed_token( string $api_url, string $store_id, string $parent_origin, string $product_id, string $variant_id, string $correlation_id ): ?array {
         if ( ! PKC_Settings::is_valid_endpoint_url( $api_url ) ) {
+            PKC_Observability::record( 'embed_token', 'configuration_error' );
             return null;
         }
         $body = wp_json_encode(
@@ -203,11 +204,13 @@ class PKC_Frontend {
         );
 
         if ( ! is_string( $body ) ) {
+            PKC_Observability::record( 'embed_token', 'invalid_response' );
             return null;
         }
 
         $credential = PKC_Settings::signing_credential();
         if ( ! $credential ) {
+            PKC_Observability::record( 'embed_token', 'configuration_error' );
             return null;
         }
         $key_id = $credential['key_id'];
@@ -230,11 +233,19 @@ class PKC_Frontend {
         );
 
         if ( is_wp_error( $response ) ) {
+            PKC_Observability::record( 'embed_token', 'transport_error' );
+            return null;
+        }
+
+        $status_code = (int) wp_remote_retrieve_response_code( $response );
+        if ( $status_code < 200 || $status_code >= 300 ) {
+            PKC_Observability::record( 'embed_token', 'http_error' );
             return null;
         }
 
         $decoded = json_decode( (string) wp_remote_retrieve_body( $response ), true );
         if ( ! is_array( $decoded ) || empty( $decoded['embed_token'] ) || ! isset( $decoded['price_modifier_minor'] ) ) {
+            PKC_Observability::record( 'embed_token', 'invalid_response' );
             return null;
         }
 
@@ -271,6 +282,7 @@ class PKC_Frontend {
      */
     private function lookup_product_mapping( string $api_url, string $store_id, string $product_id, string $variant_id, string $correlation_id ): ?array {
         if ( ! PKC_Settings::is_valid_endpoint_url( $api_url ) ) {
+            PKC_Observability::record( 'mapping_lookup', 'configuration_error' );
             return null;
         }
         $cached = get_transient( $this->mapping_cache_key( $store_id, $product_id, $variant_id ) );
@@ -292,6 +304,7 @@ class PKC_Frontend {
         );
         $credential = PKC_Settings::signing_credential();
         if ( ! is_string( $body ) || ! $credential ) {
+            PKC_Observability::record( 'mapping_lookup', 'configuration_error' );
             return null;
         }
         $key_id = $credential['key_id'];
@@ -312,12 +325,18 @@ class PKC_Frontend {
                 'body'    => $body,
             )
         );
-        if ( is_wp_error( $response ) || 200 !== wp_remote_retrieve_response_code( $response ) ) {
+        if ( is_wp_error( $response ) ) {
+            PKC_Observability::record( 'mapping_lookup', 'transport_error' );
+            return null;
+        }
+        if ( 200 !== wp_remote_retrieve_response_code( $response ) ) {
+            PKC_Observability::record( 'mapping_lookup', 'http_error' );
             return null;
         }
 
         $decoded = json_decode( (string) wp_remote_retrieve_body( $response ), true );
         if ( ! is_array( $decoded ) || ! isset( $decoded['mapped'] ) ) {
+            PKC_Observability::record( 'mapping_lookup', 'invalid_response' );
             return null;
         }
         $mapping = array(

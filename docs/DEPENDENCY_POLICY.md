@@ -31,3 +31,5 @@
 Document a temporary exception in the pull request with the advisory identifier, affected surface, compensating control, owner, and expiry date. Do not suppress an advisory indefinitely without a reviewed risk decision.
 
 Container image scanning is a required release gate. Base and infrastructure image references are digest-pinned; reviewed updates must refresh their digests. Retain the generated image SBOM artifacts with each release.
+
+Create production releases with protected semantic-version tags matching `v*.*.*` on commits reachable from `main`. The tag-triggered Security workflow runs every dependency, secret, configuration, and container gate before creating the GitHub Release. It attaches the source, application, proof-worker, PostgreSQL, and Redis SPDX JSON SBOMs plus `SHA256SUMS`; an existing release or asset is not overwritten. Protect production tags from creation, movement, or deletion outside the reviewed release process.

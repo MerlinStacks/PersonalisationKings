@@ -147,35 +147,39 @@
 - Added centralized fail-closed production configuration validation across API, admin, customiser, and workers; blocked demonstration seeding in production, stopped seed reruns resetting owner passwords, gated insecure development behavior explicitly, rejected weak/placeholder/reused secrets and invalid origins/keys, and reduced per-container secret exposure.
 - Updated the WooCommerce connector to `0.11.0` with public-HTTPS endpoint validation, local-only HTTP exceptions, bounded signing credential validation, safe outbound requests, redirect refusal, and response-size limits.
 - Updated the WooCommerce connector to `0.12.0` with durable product/variant mapping requirement snapshots and fail-closed add-to-cart validation for previously confirmed personalised products during connector or API outages.
+- Added versioned connector wrapping-key keyrings, tenant/store/purpose-bound `v3` ciphertext, strict legacy-key reads, new-write key selection, and an explicit tenant-scoped or all-tenant resumable re-encryption CLI with compare-and-swap updates and atomic audits.
+- Added tenant-bound discoverable WebAuthn passkeys with required device user verification, five-minute single-use database challenges, counter fencing, passwordless MFA-complete session creation, audited registration/login/revocation, and self-service Settings controls.
+- Added an explicit S3-compatible object-storage backend with bounded server-side transfers, API-proxied signed browser capabilities, backend-neutral readiness checks, IAM/provider-chain credentials, endpoint/path-style support, fail-closed production configuration, strict tenant key segments, and ownership/class validation at persisted-key consumers and erasure plans.
+- Replaced raster header sniffing with an isolated Sharp/libvips sanitizer that fully decodes one static PNG/JPEG/WebP under input, pixel, dimension, frame, output, concurrency, CPU, memory, PID, timeout, and private-network limits; normalizes EXIF orientation and sRGB; strips metadata through canonical re-encoding; and stores only sanitized bytes for customer and admin raster promotions.
+- Split connector webhook receipt from business processing: authenticated requests now commit a deduplicated PostgreSQL inbox row before returning, while the maintenance worker uses random claim tokens, `SKIP LOCKED`, database-time stale recovery, capped retries, deterministic terminal failures, and token-fenced serializable transactions that atomically apply order/print lifecycle effects, create platform outbox rows, and complete the inbox delivery.
+- Added BullMQ/Redis connector-inbox wake-ups with stable database-derived job IDs, best-effort post-commit enqueueing, targeted PostgreSQL claims, bounded due-work reconciliation, queue reconstruction after Redis loss, disposable one-attempt jobs, graceful worker shutdown, an internal non-persistent Redis service, and continued unconditional PostgreSQL polling as the durability fallback.
+- Updated the WooCommerce connector to `0.13.0` with privacy-bounded local telemetry: compare-and-swap 14-day fixed counters, live payload-free queue aggregates, scheduler/reconciliation/delivery/mapping/token instrumentation, WordPress Site Health tests, redacted debug information, API liveness probing without credentials, admin diagnostics/reset controls, and cached schema integrity checks.
+- Added scan-gated GitHub Release publication for protected semantic-version tags, attaching source and image SPDX JSON SBOMs plus checksums only after dependency, secret, configuration, and container security jobs pass and the tagged commit is verified on `main`.
 
 ### Still To Do
 
 - Confirm Phase 0 production details: exact printer model, RIP product/version, accepted PDF format, plate names, mask policies, print order, overprint/knockout behaviour, colour management, and dimensional tolerances.
 - Build and physically validate the Phase 0 production exporter fixtures before claiming UV print-file readiness.
 - Replace placeholder/demo output profile settings with confirmed printer/RIP values after Phase 0.
-- Add WebAuthn passkeys and verified forgotten-password/support recovery; TOTP MFA, one-time recovery codes, and revocable database sessions are now implemented.
+- Add verified forgotten-password/support recovery; WebAuthn passkeys, TOTP MFA, one-time recovery codes, and revocable database sessions are now implemented.
 - Complete live theme/browser compatibility testing for the WooCommerce block, classic-hook, gallery-replacement, modal, shortcode, and manual placement adapters.
 - Complete full touch workflow and browser accessibility testing for the constrained customiser.
 - Add pinned Chromium golden-image comparisons for the PNG proof and later production output; geometric live-preview/proof fixtures are now covered.
 - Add visual/geometric fixture tests comparing preview/proof/production output.
-- Expand media upload validation with full decoder limits, metadata stripping, safe re-encoding, and isolated processing.
 - Add malware scanning or equivalent isolated media processing where required.
 - Extend erasure to ordered artwork only after retention eligibility is modelled, and integrate external replica/backup systems with automatic purge evidence; unordered live storage and metadata execution is now implemented.
-- Add WordPress-compatible connector telemetry and deploy the documented external worker-heartbeat alert before Phase 0 generated artifacts are enabled; API/admin/inbox/outbox/artifact/maintenance/proof/render OTLP coverage, bounded worker heartbeat metrics, and durable cleanup alerting are implemented.
-- Add later S3-compatible object-storage backend support.
+- Deploy the documented external worker-heartbeat alert before Phase 0 generated artifacts are enabled; WordPress-compatible local connector telemetry plus API/admin/inbox/outbox/artifact/maintenance/proof/render OTLP coverage, bounded worker heartbeat metrics, and durable cleanup alerting are implemented.
 - Execute the clean PostgreSQL migration gate in GitHub Actions and repeat it against production-like restored data before deployment; the CI service and migration command are implemented, while local execution remains blocked by the unavailable Docker daemon.
 - Configure the selected production backup tool/provider, then execute and record the first isolated PITR/object restore drill; required coverage and the drill procedure are documented.
-- Add real BullMQ/Redis dispatch while keeping PostgreSQL inbox/outbox/print job records authoritative.
-- Add claim tokens and safe mutation rules for real print rendering, asynchronous webhook processing, and platform outbox dispatch; proof/deletion stale, missing, and exhausted work is reconciled, while incomplete queue contracts are observation-only.
+- Extend real BullMQ/Redis dispatch beyond the connector inbox only after platform outbox and print-render destinations, immutable payloads, and acknowledgment semantics are defined; PostgreSQL remains authoritative.
+- Add claim tokens and safe mutation rules for real print rendering and platform outbox dispatch; asynchronous webhook processing now uses token-fenced PostgreSQL claims, while proof/deletion stale, missing, and exhausted work is reconciled and incomplete platform dispatch contracts remain observation-only.
 - Build the real render/production exporter after Phase 0 is validated.
 - Add preflight validation for spot names, output profile, colour space, dimensions, masks, layer order, and artifact checksums.
 - Add generated artifact creation from the real production exporter after Phase 0.
 - Expand failed print job review workflows and production operator controls beyond the current regeneration endpoint.
 - Complete OpenTelemetry log correlation and add dispatch/creation telemetry when the real platform outbox dispatcher and Phase 0 production artifact exporter are implemented; current API, admin, inbox/outbox creation/backlog, artifact download/cleanup, and worker boundaries are covered.
 - Replace the bounded per-process API limiter with coordinated Redis/edge limits after trusted-proxy topology is configured, and complete browser CSP/sandbox compatibility tests.
-- Add wrapping-key versioning and re-encryption tooling for `PK_CONNECTOR_SECRET_ENCRYPTION_KEY`; per-store HMAC key lookup, overlap rotation, and revocation are now implemented.
-- Expand automated tests for tenant isolation, connector signatures, duplicate events, customiser commit validation, order ingestion, print job creation, upload validation edge cases, and WooCommerce cart/order behaviour.
-- Add production Dockerfiles, then enforce digest-pinned base images, image vulnerability scanning, and release-attached SBOMs; repository CI, dependency/secret/configuration scanning, source SBOM generation, and update policy automation are implemented.
+- Expand automated tests for tenant isolation, connector signatures, duplicate events, customiser commit validation, order ingestion, print job creation, upload validation edge cases, and WooCommerce cart/order behaviour; manual print-job creation now verifies that the selected snapshot belongs to the selected tenant and order, and commit validation prevents cross-layer upload-size policy bypasses.
 - Deploy and smoke-test the documented production topology on the target host; production Compose, reverse proxy guidance, cache coordination boundaries, persistence, and rollout procedures are implemented.
 - Add accessibility testing against WCAG 2.2 AA for admin and customiser.
 - Add private beta operational runbooks, failure simulations, monitoring, and load tests.

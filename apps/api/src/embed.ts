@@ -8,7 +8,7 @@ import {
   type CustomiserConfig,
   type SceneGraph
 } from "@personalise-kings/render-schema";
-import { createObjectStorageFromEnv, objectKey, validateRasterUpload, type ObjectKey } from "@personalise-kings/storage";
+import { createObjectStorageFromEnv, isObjectKeyForTenant, objectKey, objectStorageMaximumBytesFromEnv, sanitizeRasterUpload, type ObjectKey, type StorageClass } from "@personalise-kings/storage";
 import type { Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import * as z from "zod";
@@ -223,7 +223,8 @@ export async function handleCreateCustomiserUpload(request: Request, rawBody: st
   }
   const imageRule = candidateRule;
   if (!imageRule.acceptedContentTypes.includes(parsedBody.data.content_type)
-    || parsedBody.data.byte_size > imageRule.maximumUploadBytes) {
+    || parsedBody.data.byte_size > imageRule.maximumUploadBytes
+    || parsedBody.data.byte_size > objectStorageMaximumBytesFromEnv()) {
     return Response.json({ error: "upload_not_allowed", correlationId }, { status: 422 });
   }
 
@@ -284,7 +285,7 @@ export async function handlePromoteCustomiserUpload(
     },
     include: { asset: true }
   });
-  if (!assetVersion || !assetVersion.objectKey.startsWith(`temporary_upload/${merchantId}/`)) {
+  if (!assetVersion || !isObjectKeyForTenant(assetVersion.objectKey, merchantId, ["temporary_upload"])) {
     return Response.json({ error: "upload_not_found", correlationId }, { status: 404 });
   }
 
@@ -298,52 +299,77 @@ export async function handlePromoteCustomiserUpload(
 
   const validation = BigInt(bytes.byteLength) > assetVersion.byteSize
     ? { accepted: false as const, reason: "Uploaded file exceeds its approved size" }
-    : validateRasterUpload(bytes);
+    : await sanitizeRasterUpload(bytes);
   if (!validation.accepted || (validation.detectedContentType && validation.detectedContentType !== assetVersion.contentType)) {
-    const quarantinedKey = objectKey("quarantined_file", merchantId, assetVersion.id);
-    await storage.putObject(quarantinedKey, bytes, assetVersion.contentType);
-    await storage.deleteObject(assetVersion.objectKey as ObjectKey);
-    await prisma.$transaction([
-      prisma.assetVersion.update({
-        where: { id: assetVersion.id },
-        data: { objectKey: quarantinedKey, validationStatus: "rejected" }
-      }),
-      prisma.auditEvent.create({
-        data: {
-          merchantId,
-          action: "customiser.upload_rejected",
-          targetType: "AssetVersion",
-          targetId: assetVersion.id,
-          metadata: {
-            reason: validation.reason ?? "Detected file type does not match the approved upload type",
-            correlationId
+    const rejectionReason = validation.accepted
+      ? "Detected file type does not match the approved upload type"
+      : validation.reason;
+    const quarantinedKey = objectKey("quarantined_file", merchantId, `${assetVersion.id}-${randomUUID()}`);
+    await storage.putObject(quarantinedKey, bytes, "application/octet-stream");
+    let rejected = false;
+    try {
+      rejected = await prisma.$transaction(async (tx) => {
+        const finalized = await tx.assetVersion.updateMany({
+          where: { id: assetVersion.id, merchantId, objectKey: assetVersion.objectKey, validationStatus: "pending", deletedAt: null },
+          data: { objectKey: quarantinedKey, validationStatus: "rejected" }
+        });
+        if (finalized.count !== 1) return false;
+        await tx.auditEvent.create({
+          data: {
+            merchantId,
+            action: "customiser.upload_rejected",
+            targetType: "AssetVersion",
+            targetId: assetVersion.id,
+            metadata: { reason: rejectionReason, correlationId }
           }
-        }
-      })
-    ]);
+        });
+        return true;
+      });
+    } catch (error) {
+      await storage.deleteObject(quarantinedKey).catch(() => undefined);
+      throw error;
+    }
+    if (!rejected) {
+      await storage.deleteObject(quarantinedKey).catch(() => undefined);
+      return Response.json({ error: "upload_already_processed", correlationId }, { status: 409 });
+    }
+    await deletePromotedSource(storage, assetVersion.objectKey as ObjectKey);
     return Response.json({
       error: "upload_rejected",
-      message: validation.reason ?? "Detected file type does not match the approved upload type",
+      message: rejectionReason,
       correlationId
     }, { status: 422 });
   }
 
-  const destinationKey = objectKey("draft_customisation_asset", merchantId, assetVersion.id);
-  const contentType = validation.detectedContentType ?? assetVersion.contentType;
-  const metadata = await storage.putObject(destinationKey, bytes, contentType);
-  await storage.deleteObject(assetVersion.objectKey as ObjectKey);
-  const updated = await prisma.assetVersion.update({
-    where: { id: assetVersion.id },
-    data: {
-      objectKey: metadata.objectKey,
-      checksumSha256: metadata.checksumSha256,
-      byteSize: BigInt(metadata.byteSize),
-      contentType,
-      widthPx: validation.widthPx,
-      heightPx: validation.heightPx,
-      validationStatus: "accepted"
-    }
-  });
+  const destinationKey = objectKey("draft_customisation_asset", merchantId, `${assetVersion.id}-${randomUUID()}`);
+  const contentType = validation.detectedContentType;
+  const metadata = await storage.putObject(destinationKey, validation.bytes, contentType);
+  let updated;
+  try {
+    updated = await prisma.$transaction(async (tx) => {
+      const finalized = await tx.assetVersion.updateMany({
+        where: { id: assetVersion.id, merchantId, objectKey: assetVersion.objectKey, validationStatus: "pending", deletedAt: null },
+        data: {
+          objectKey: metadata.objectKey,
+          checksumSha256: metadata.checksumSha256,
+          byteSize: BigInt(metadata.byteSize),
+          contentType,
+          widthPx: validation.widthPx,
+          heightPx: validation.heightPx,
+          validationStatus: "accepted"
+        }
+      });
+      return finalized.count === 1 ? tx.assetVersion.findUniqueOrThrow({ where: { id: assetVersion.id } }) : null;
+    });
+  } catch (error) {
+    await storage.deleteObject(destinationKey).catch(() => undefined);
+    throw error;
+  }
+  if (!updated) {
+    await storage.deleteObject(destinationKey).catch(() => undefined);
+    return Response.json({ error: "upload_already_processed", correlationId }, { status: 409 });
+  }
+  await deletePromotedSource(storage, assetVersion.objectKey as ObjectKey);
 
   return Response.json({
     asset_version_id: updated.id,
@@ -726,7 +752,11 @@ async function referencedAssetVersions(merchantId: string, scene: SceneGraph, cu
   const imageKinds = new Set(["artwork", "clipart", "upload", "mockup"]);
   if (versions.length !== references.size || !versions.every((version) => {
     const expected = references.get(version.id);
-    return expected === "font" ? version.asset.kind === "font" : imageKinds.has(version.asset.kind);
+    const validKind = expected === "font" ? version.asset.kind === "font" : imageKinds.has(version.asset.kind);
+    const allowedClasses: StorageClass[] = version.asset.kind === "upload"
+      ? ["draft_customisation_asset", "order_bound_customer_asset"]
+      : ["merchant_design_asset"];
+    return validKind && isObjectKeyForTenant(version.objectKey, merchantId, allowedClasses);
   })) return null;
 
   if (customiserConfig) {
@@ -734,11 +764,21 @@ async function referencedAssetVersions(merchantId: string, scene: SceneGraph, cu
     const rulesById = new Map(customiserConfig.layers.map((rule) => [rule.layerId, rule]));
     for (const layer of scene.layers) {
       const rule = rulesById.get(layer.id);
-      if (layer.type === "image" && rule?.type === "image"
-        && !rule.acceptedContentTypes.some((contentType) => contentType === versionsById.get(layer.assetVersionId)?.contentType)) return null;
+      if (layer.type === "image" && rule?.type === "image") {
+        const version = versionsById.get(layer.assetVersionId);
+        if (!version || !imageAssetMatchesRule(version, rule)) return null;
+      }
     }
   }
   return versions;
+}
+
+export function imageAssetMatchesRule(
+  version: { contentType: string; byteSize: bigint; asset: { kind: string } },
+  rule: Extract<CustomiserConfig["layers"][number], { type: "image" }>
+) {
+  return rule.acceptedContentTypes.includes(version.contentType as "image/png" | "image/jpeg" | "image/webp")
+    && (version.asset.kind !== "upload" || version.byteSize <= BigInt(rule.maximumUploadBytes));
 }
 
 function resolveDesignConfiguration(designVersion: { sceneGraph: unknown; customiserConfig: unknown }) {
@@ -755,4 +795,15 @@ function resolveDesignConfiguration(designVersion: { sceneGraph: unknown; custom
 function summariseInputs(inputs: Record<string, unknown>) {
   const text = Object.entries(inputs).map(([key, value]) => `${key}: ${String(value)}`).join(", ");
   return text || "Customisation committed";
+}
+
+async function deletePromotedSource(storage: ReturnType<typeof createObjectStorageFromEnv>, sourceKey: ObjectKey) {
+  try {
+    await storage.deleteObject(sourceKey);
+  } catch (error) {
+    console.error("Promoted upload source cleanup failed", {
+      sourceKey,
+      error: error instanceof Error ? error.message : "Unknown error"
+    });
+  }
 }

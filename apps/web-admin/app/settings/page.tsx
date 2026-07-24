@@ -10,14 +10,19 @@ export default async function SettingsPage() {
     update: {},
     create: { merchantId: session.merchantId }
   }), null);
-  const [staff, sessions, recoveryCodesRemaining] = await Promise.all([
+  const [staff, sessions, recoveryCodesRemaining, passkeys] = await Promise.all([
     prisma.staffUser.findUnique({ where: { id: session.userId }, select: { mfaEnabledAt: true } }),
     prisma.adminSession.findMany({
       where: { staffUserId: session.userId, revokedAt: null, expiresAt: { gt: new Date() }, mfaVerifiedAt: { not: null } },
       orderBy: { lastSeenAt: "desc" },
       select: { id: true, createdAt: true, lastSeenAt: true, expiresAt: true, userAgent: true }
     }),
-    prisma.staffRecoveryCode.count({ where: { staffUserId: session.userId, usedAt: null } })
+    prisma.staffRecoveryCode.count({ where: { staffUserId: session.userId, usedAt: null } }),
+    prisma.staffPasskey.findMany({
+      where: { merchantId: session.merchantId, staffUserId: session.userId },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, name: true, deviceType: true, backedUp: true, createdAt: true, lastUsedAt: true }
+    })
   ]);
 
   return (
@@ -33,6 +38,7 @@ export default async function SettingsPage() {
         <SecuritySettings
           currentSessionId={session.sessionId}
           sessions={sessions.map((item) => ({ ...item, createdAt: item.createdAt.toISOString(), lastSeenAt: item.lastSeenAt.toISOString(), expiresAt: item.expiresAt.toISOString() }))}
+          passkeys={passkeys.map((item) => ({ ...item, createdAt: item.createdAt.toISOString(), lastUsedAt: item.lastUsedAt?.toISOString() ?? null }))}
           recoveryCodesRemaining={recoveryCodesRemaining}
           mfaEnabledAt={staff?.mfaEnabledAt?.toISOString() ?? null}
         />

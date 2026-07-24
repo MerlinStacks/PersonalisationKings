@@ -17,7 +17,9 @@
     "@personalise-kings/render-schema": "workspace:*",
     "@personalise-kings/storage": "workspace:*",
     "@prisma/client": "^6.19.0",
-    "next": "16.2.10",
+    "@simplewebauthn/browser": "13.3.0",
+    "@simplewebauthn/server": "13.3.2",
+    "next": "16.2.11",
     "react": "19.2.7",
     "react-dom": "19.2.7",
     "zod": "4.4.3"

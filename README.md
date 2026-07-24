@@ -15,6 +15,7 @@ Standalone personalisation platform for WooCommerce-first product customisation,
 - `packages/auth` MVP roles and permission helpers
 - `packages/storage` object-storage abstraction
 - `packages/observability` correlation ID helpers
+- `apps/media-sanitizer` isolated raster decoding, metadata stripping, and safe re-encoding
 
 ## First Run
 
@@ -25,6 +26,8 @@ bun run dev:services
 bun run prisma:migrate
 bun run db:seed
 bun run prisma:generate
+bun run dev:media-sanitizer
+bun run dev:api
 bun run dev:web
 ```
 
@@ -68,6 +71,10 @@ Saving a customisation now generates a deterministic revision-bound SVG preview 
 
 The separate proof worker claims PostgreSQL-backed jobs and renders those self-contained previews to PNG with pinned Playwright Chromium. Browser network access is blocked, dimensions and generated SVG structure are validated, interrupted claims recover after 15 minutes, and temporary failures retry with capped exponential backoff. Start it with `bun run worker:proof`.
 
+Connector webhooks are acknowledged after durable PostgreSQL receipt. The maintenance worker asynchronously claims inbox rows with fenced tokens and atomically applies order, print-job, audit, and platform-outbox changes. Keep `bun run worker:maintenance` running whenever connector events are accepted.
+
+BullMQ provides immediate connector-inbox wake-ups through disposable Redis jobs containing only the delivery ID. PostgreSQL polling and retries remain authoritative, so local development can omit Redis by leaving `PK_CONNECTOR_WAKEUP_REDIS_URL` blank.
+
 The maintenance worker reconciles malformed, stale, and exhausted proof/deletion leases in bounded batches with compare-and-set updates and audit events. It recreates missing proof work only when an accepted tenant-bound SVG preview already exists. Print jobs, webhook inbox anomalies, and the platform outbox remain observation-only until their production lease or dispatch contracts are implemented; reconciliation never bypasses the Phase 0 render gate or asserts backup deletion.
 
 Generated production-file bytes use the merchant's configured retention period once their attempt is finished and print job is terminal. Cleanup uses durable retry claims, blocks new downloads while deletion is ambiguous, waits for active signed-download leases, and retains artifact metadata, checksum, preflight result, output profile, and audit history after bytes expire. Live byte deletion never asserts that backup copies have rotated. Generic asset uploads cannot create production artifacts while the Phase 0 exporter remains gated.
@@ -96,7 +103,7 @@ API JSON bodies are streamed through route-specific byte limits before parsing, 
 
 Deletion Requests execute live erasure for tenant-owned customer upload assets and versions. The maintenance worker scans canonical scenes and snapshots for exact references, blocks design- or order-bound artwork, archives affected unordered sessions, cancels proof work, removes embedded SVG/PNG derivatives and source objects, then deletes live metadata. Requests remain `live_deleted` until an operator separately confirms external backup rotation; backup restoration procedures must replay the external erasure ledger to prevent resurrection.
 
-Admin authentication uses opaque database sessions rather than self-contained cookies. A valid password creates only a ten-minute pending session; users must enroll or verify a TOTP authenticator before the token is rotated into an eight-hour authenticated session. TOTP steps cannot be replayed, recovery codes are high-entropy and single-use, role changes revoke active sessions, and Settings lists sessions for individual or bulk revocation. Configure `PK_ADMIN_MFA_ENCRYPTION_KEY` and `PK_ADMIN_RECOVERY_CODE_PEPPER` before production deployment.
+Admin authentication uses opaque database sessions rather than self-contained cookies. A valid password creates only a ten-minute pending session; users must enroll or verify a TOTP authenticator before the token is rotated into an eight-hour authenticated session. After MFA login, staff can enroll discoverable WebAuthn passkeys that require device user verification and can replace password plus TOTP entry on later logins. Challenges are database-backed, single-use, and expire after five minutes; credential counters, tenant binding, individual revocation, and registration/login/revocation audits are enforced. TOTP steps cannot be replayed, recovery codes are high-entropy and single-use, role changes revoke active sessions, and Settings lists passkeys and sessions for revocation. Configure `PK_ADMIN_MFA_ENCRYPTION_KEY` and `PK_ADMIN_RECOVERY_CODE_PEPPER` before production deployment.
 
 Server processes validate production configuration before binding ports or polling queues. Production requires an explicit `NODE_ENV`, exact HTTPS service origins, an absolute storage path, canonical 32-byte AES keys, independently generated signing secrets of at least 32 bytes, and no placeholder or reused values. The demonstration seed is explicitly development-only and cannot reset an existing owner password.
 
@@ -108,7 +115,7 @@ Mappings can apply an integer price change in the store currency's minor units. 
 
 The Stores page uses WooCommerce's native `wc-auth/v1/authorize` flow for one-click approval. Enter the store's public HTTPS base URL, approve the requested read-only key in WooCommerce, and WooCommerce sends the key to a separate callback before returning the browser to the admin. Authorization attempts are random, single-use, expire after 15 minutes, and are bound to the initiating merchant and staff user.
 
-Set `PK_WEBAPP_URL` to the admin webapp's public HTTPS origin and configure `PK_CONNECTOR_SECRET_ENCRYPTION_KEY` as a base64-encoded 32-byte key. Consumer key/secret pairs are stored together under AES-256-GCM encryption in PostgreSQL and are never included in Store API or page props. Rotation creates a fresh encrypted credential record so an older in-flight health check cannot overwrite it.
+Set `PK_WEBAPP_URL` to the admin webapp's public HTTPS origin and configure the connector wrapping-key keyring described in `docs/DEPLOYMENT.md`. Consumer key/secret pairs use versioned, tenant/store/purpose-bound AES-256-GCM envelopes and are never included in Store API or page props. Credential rotation creates a fresh encrypted record so an older in-flight health check cannot overwrite it; wrapping-key rotation uses the explicit resumable re-encryption command.
 
 Manual REST key entry remains available as a fallback. Create a dedicated Read key under WooCommerce > Settings > Advanced > REST API; the webapp must complete an authenticated API request before it saves the replacement. Health requests require HTTPS, reject private/reserved DNS results, pin the validated address for the TLS connection, refuse redirects, and time out. `PK_ALLOW_PRIVATE_STORE_URLS=true` permits local development stores only outside production.
 

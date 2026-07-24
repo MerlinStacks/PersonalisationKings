@@ -1,5 +1,5 @@
 import { prisma } from "@personalise-kings/db";
-import { createObjectStorageFromEnv, objectKey } from "@personalise-kings/storage";
+import { createObjectStorageFromEnv, objectKey, objectStorageMaximumBytesFromEnv } from "@personalise-kings/storage";
 import { randomUUID } from "node:crypto";
 import * as z from "zod";
 import { created, parseJson } from "../../../../lib/api";
@@ -8,10 +8,14 @@ import { requirePermission } from "../../../../lib/rbac";
 import { requireSameOrigin } from "../../../../lib/same-origin";
 
 const uploadIntentSchema = z.object({
-  kind: z.enum(["font", "artwork", "clipart", "upload", "mockup", "preview"]),
+  kind: z.enum(["font", "artwork", "clipart", "upload", "mockup"]),
   name: z.string().min(1).max(180),
   contentType: z.string().min(1),
   byteSize: z.number().int().positive().max(50 * 1024 * 1024)
+}).superRefine((value, context) => {
+  if (value.kind !== "font" && !["image/png", "image/jpeg", "image/webp"].includes(value.contentType)) {
+    context.addIssue({ code: "custom", path: ["contentType"], message: "Raster assets must be PNG, JPEG, or WebP" });
+  }
 });
 
 export async function POST(request: Request) {
@@ -22,6 +26,7 @@ export async function POST(request: Request) {
   const session = access.session;
   const parsed = await parseJson(request, uploadIntentSchema);
   if (parsed.error) return parsed.error;
+  if (parsed.data.byteSize > objectStorageMaximumBytesFromEnv()) return Response.json({ error: "Upload exceeds configured storage limit" }, { status: 422 });
 
   const storage = createObjectStorageFromEnv();
   const uploadId = randomUUID();

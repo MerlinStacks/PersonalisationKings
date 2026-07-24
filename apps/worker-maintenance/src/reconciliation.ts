@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { prisma } from "@personalise-kings/db";
-import { recordHistogram } from "@personalise-kings/observability/telemetry";
+import { recordGauge, recordHistogram } from "@personalise-kings/observability/telemetry";
 import { Prisma } from "@prisma/client";
 
 const defaultBatchSize = 100;
@@ -214,6 +214,7 @@ async function observeUnsupportedQueues(now: Date, merchantId?: string) {
       runningPrintJobs: bigint;
       duplicatePrintJobs: bigint;
       unprocessedWebhooks: bigint;
+      failedWebhooks: bigint;
       pendingOutbox: bigint;
       invalidReadyProofJobs: bigint;
       invalidDeletionTimestamps: bigint;
@@ -227,7 +228,8 @@ async function observeUnsupportedQueues(now: Date, merchantId?: string) {
           GROUP BY "orderId", "artworkSnapshotId"
           HAVING COUNT(*) > 1
         ) rows) AS "duplicatePrintJobs",
-        (SELECT COUNT(*) FROM (SELECT 1 FROM "WebhookDelivery" WHERE "processedAt" IS NULL ${webhookMerchant} LIMIT ${cap}) rows) AS "unprocessedWebhooks",
+        (SELECT COUNT(*) FROM (SELECT 1 FROM "WebhookDelivery" WHERE "status" IN ('pending'::"WebhookDeliveryStatus", 'processing'::"WebhookDeliveryStatus") ${webhookMerchant} LIMIT ${cap}) rows) AS "unprocessedWebhooks",
+        (SELECT COUNT(*) FROM (SELECT 1 FROM "WebhookDelivery" WHERE "status" = 'failed'::"WebhookDeliveryStatus" ${webhookMerchant} LIMIT ${cap}) rows) AS "failedWebhooks",
         (SELECT COUNT(*) FROM (SELECT 1 FROM "OutboxEvent" WHERE "dispatchedAt" IS NULL AND "failedAt" IS NULL ${outboxMerchant} LIMIT ${cap}) rows) AS "pendingOutbox",
         (SELECT COUNT(*) FROM (
           SELECT 1 FROM "ProofJob" proof
@@ -252,7 +254,8 @@ async function observeUnsupportedQueues(now: Date, merchantId?: string) {
     })
   ]);
   const observed = counts[0];
-  recordHistogram("pk.connector.inbox.backlog.pending", boundedMetricCount(observed?.unprocessedWebhooks, cap));
+  recordGauge("pk.connector.inbox.backlog.pending", boundedMetricCount(observed?.unprocessedWebhooks, cap));
+  recordGauge("pk.connector.inbox.backlog.failed", boundedMetricCount(observed?.failedWebhooks, cap));
   recordHistogram("pk.outbox.backlog.pending", boundedMetricCount(observed?.pendingOutbox, cap));
   if (oldestOutbox) {
     recordHistogram("pk.outbox.backlog.oldest_age", Math.max(0, (now.getTime() - oldestOutbox.createdAt.getTime()) / 1000));
@@ -263,6 +266,7 @@ async function observeUnsupportedQueues(now: Date, merchantId?: string) {
     observedRunningPrintJobs: cappedCount(observed?.runningPrintJobs, cap),
     observedDuplicateRecentPrintJobGroups: cappedCount(observed?.duplicatePrintJobs, cap),
     observedUnprocessedWebhooks: cappedCount(observed?.unprocessedWebhooks, cap),
+    observedFailedWebhooks: cappedCount(observed?.failedWebhooks, cap),
     observedPendingOutbox: cappedCount(observed?.pendingOutbox, cap),
     observedOldestPendingOutboxAt: oldestOutbox?.createdAt.toISOString() ?? null,
     observedInvalidReadyProofJobs: cappedCount(observed?.invalidReadyProofJobs, cap),

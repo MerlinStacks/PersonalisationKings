@@ -14,6 +14,7 @@ interface TelemetryState {
 const globalTelemetry = globalThis as typeof globalThis & { __pkTelemetry?: TelemetryState };
 const counters = new Map<string, ReturnType<ReturnType<typeof metrics.getMeter>["createCounter"]>>();
 const histograms = new Map<string, ReturnType<ReturnType<typeof metrics.getMeter>["createHistogram"]>>();
+const gauges = new Map<string, ReturnType<ReturnType<typeof metrics.getMeter>["createGauge"]>>();
 
 export interface TelemetryConfig {
   endpoint: string;
@@ -137,4 +138,13 @@ export function recordHistogram(name: string, value: number, attributes: Attribu
     histograms.set(name, histogram);
   }
   histogram.record(value, attributes);
+}
+
+export function recordGauge(name: string, value: number, attributes: Attributes = {}) {
+  let gauge = gauges.get(name);
+  if (!gauge) {
+    gauge = metrics.getMeter("@personalise-kings/observability").createGauge(name);
+    gauges.set(name, gauge);
+  }
+  gauge.record(value, attributes);
 }

@@ -4,7 +4,7 @@ import * as z from "zod";
 import { badRequest, ok } from "../../../../../lib/api";
 import { writeAuditEvent } from "../../../../../lib/audit";
 import { persistStoreCredential } from "../../../../../lib/store-credentials";
-import { connectorEncryptionKey, encryptWooCommerceCredentials } from "../../../../../lib/woocommerce";
+import { connectorEncryptionKeys, encryptWooCommerceCredentials } from "../../../../../lib/woocommerce";
 
 const MAX_CALLBACK_BYTES = 16 * 1_024;
 const callbackSchema = z.object({
@@ -55,7 +55,7 @@ export async function POST(request: Request) {
     encryptedPayload = encryptWooCommerceCredentials({
       consumerKey: payload.consumer_key,
       consumerSecret: payload.consumer_secret
-    }, connectorEncryptionKey());
+    }, connectorEncryptionKeys(), attempt.merchantId, attempt.storeId);
   } catch {
     return ok({ error: "credential_storage_unavailable", message: "Store credential encryption is not configured" }, { status: 503 });
   }

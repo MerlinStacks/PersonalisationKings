@@ -1,4 +1,5 @@
-import { decryptConnectorSecret, encryptConnectorSecret } from "@personalise-kings/auth";
+import { decryptVersionedConnectorSecret, encryptVersionedConnectorSecret } from "@personalise-kings/auth";
+import { connectorWrappingKeyring, type ConnectorWrappingKeyring } from "@personalise-kings/config/server";
 import { lookup } from "node:dns/promises";
 import { request as httpsRequest } from "node:https";
 import { isIP, type LookupFunction } from "node:net";
@@ -101,21 +102,30 @@ export function webAppUrl() {
   return normalizeApplicationUrl(configured ?? "http://localhost:3000");
 }
 
-export function connectorEncryptionKey() {
-  const key = process.env.PK_CONNECTOR_SECRET_ENCRYPTION_KEY;
-  if (!key) throw new Error("PK_CONNECTOR_SECRET_ENCRYPTION_KEY is required for store credentials");
-  if (Buffer.from(key, "base64").length !== 32) {
-    throw new Error("PK_CONNECTOR_SECRET_ENCRYPTION_KEY must be a base64-encoded 32-byte key");
-  }
-  return key;
+export function connectorEncryptionKeys() {
+  return connectorWrappingKeyring();
 }
 
-export function encryptWooCommerceCredentials(credentials: WooCommerceCredentials, encryptionKey: string) {
-  return encryptConnectorSecret(JSON.stringify(wooCommerceCredentialsSchema.parse(credentials)), encryptionKey);
+export function encryptWooCommerceCredentials(
+  credentials: WooCommerceCredentials,
+  keyring: ConnectorWrappingKeyring,
+  merchantId: string,
+  storeId: string
+) {
+  return encryptVersionedConnectorSecret(JSON.stringify(wooCommerceCredentialsSchema.parse(credentials)), keyring, {
+    purpose: "woocommerce-rest",
+    merchantId,
+    storeId
+  });
 }
 
-export function decryptWooCommerceCredentials(encrypted: string, encryptionKey: string): WooCommerceCredentials | null {
-  const plaintext = decryptConnectorSecret(encrypted, encryptionKey);
+export function decryptWooCommerceCredentials(
+  encrypted: string,
+  keyring: ConnectorWrappingKeyring,
+  merchantId: string,
+  storeId: string
+): WooCommerceCredentials | null {
+  const plaintext = decryptVersionedConnectorSecret(encrypted, keyring, { purpose: "woocommerce-rest", merchantId, storeId });
   if (!plaintext) return null;
   try {
     return wooCommerceCredentialsSchema.parse(JSON.parse(plaintext));

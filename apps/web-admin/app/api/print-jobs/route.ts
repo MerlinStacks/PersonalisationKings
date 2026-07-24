@@ -35,11 +35,17 @@ export async function POST(request: Request) {
 
   const [order, snapshot] = await Promise.all([
     prisma.externalOrder.findFirst({ where: { id: parsed.data.orderId, merchantId: session.merchantId } }),
-    prisma.orderArtworkSnapshot.findFirst({ where: { id: parsed.data.artworkSnapshotId, merchantId: session.merchantId } })
+    prisma.orderArtworkSnapshot.findFirst({
+      where: {
+        id: parsed.data.artworkSnapshotId,
+        merchantId: session.merchantId,
+        customisationRevision: { lineItems: { some: { orderId: parsed.data.orderId } } }
+      }
+    })
   ]);
 
   if (!order || !snapshot) {
-    return badRequest("Order and artwork snapshot must belong to the current merchant");
+    return badRequest("Order and artwork snapshot must belong to the current merchant and order");
   }
 
   const printJob = await prisma.$transaction(async (tx) => {

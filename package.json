@@ -7,6 +7,7 @@
     "packages/*"
   ],
   "overrides": {
+    "postcss": "8.5.19",
     "sharp": "0.35.3"
   },
   "scripts": {
@@ -14,6 +15,7 @@
     "dev:web": "bun --filter @personalise-kings/web-admin dev",
     "dev:customiser": "bun --filter @personalise-kings/customiser dev",
     "dev:api": "bun --filter @personalise-kings/api dev",
+    "dev:media-sanitizer": "bun --filter @personalise-kings/media-sanitizer dev",
     "worker:maintenance": "bun --filter @personalise-kings/worker-maintenance dev",
     "worker:render": "bun --filter @personalise-kings/worker-render dev",
     "worker:proof": "bun --filter @personalise-kings/worker-proof dev",
@@ -23,7 +25,8 @@
     "prisma:generate": "bun --filter @personalise-kings/db prisma generate --schema prisma/schema.prisma",
     "prisma:migrate": "bun --filter @personalise-kings/db prisma migrate dev --schema prisma/schema.prisma",
     "prisma:deploy": "bun --filter @personalise-kings/db prisma migrate deploy --schema prisma/schema.prisma",
-    "db:seed": "bun --filter @personalise-kings/db seed"
+    "db:seed": "bun --filter @personalise-kings/db seed",
+    "db:reencrypt-connector-secrets": "bun --filter @personalise-kings/db reencrypt-connector-secrets"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

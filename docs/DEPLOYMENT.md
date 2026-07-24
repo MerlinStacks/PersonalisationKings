@@ -8,9 +8,11 @@
 - A one-shot Prisma migration service that must complete before application services start.
 - Admin, customiser, and API HTTP services bound to loopback for an external TLS reverse proxy.
 - Maintenance, render, and proof workers with PostgreSQL-authoritative work queues.
-- One durable object volume shared by admin, API, maintenance, render, and proof services.
+- An unexposed media-sanitizer service on a dedicated internal network for bounded raster decoding and re-encoding.
+- An unexposed, non-persistent Redis instance used only for disposable connector-inbox BullMQ wake-ups.
+- Local mode uses one durable object volume shared by admin, API, maintenance, render, and proof services. S3-compatible mode uses a shared remote bucket instead.
 
-Redis is intentionally absent because no production path currently consumes it. Run one API replica until a coordinated edge or Redis-backed limiter replaces the in-process limiter. The shared filesystem also prevents safe multi-host scaling until an S3-compatible storage backend is implemented.
+Redis accelerates connector-inbox processing only; it is not a source of truth and is not yet used for coordinated API rate limiting or platform outbox dispatch. Run one API replica until a coordinated edge or Redis-backed limiter replaces the in-process limiter. S3-compatible storage removes the shared-filesystem constraint, but does not make the in-process API rate limiter safe for multiple API replicas.
 
 The render worker remains Phase 0 gated and moves jobs to review rather than producing unvalidated UV output. Do not represent this deployment as print-production ready until the real printer and RIP acceptance fixtures pass.
 
@@ -32,22 +34,61 @@ Set these values in the protected deployment environment file:
 NODE_ENV=production
 POSTGRES_PASSWORD=<random database password>
 DATABASE_URL=postgresql://personalise_kings:<percent-encoded-password>@postgres:5432/personalise_kings?schema=public
+OBJECT_STORAGE_BACKEND=local
 OBJECT_STORAGE_MAX_BYTES=26214400
+PK_MEDIA_SANITIZER_TIMEOUT_MS=20000
 PK_WEBAPP_URL=https://admin.example.com
 PK_CUSTOMISER_URL=https://customiser.example.com
 PK_API_URL=https://api.example.com
 PK_ADMIN_MFA_ENCRYPTION_KEY=<openssl rand -base64 32>
 PK_ADMIN_RECOVERY_CODE_PEPPER=<openssl rand -base64 48>
-PK_CONNECTOR_SECRET_ENCRYPTION_KEY=<openssl rand -base64 32>
+PK_CONNECTOR_SECRET_ENCRYPTION_ACTIVE_KEY_ID=wk_2026_07
+PK_CONNECTOR_SECRET_ENCRYPTION_KEYS={"legacy":"<current base64 key>","wk_2026_07":"<new openssl rand -base64 32 key>"}
+# Keep this equal to the keyring's legacy entry during the compatibility rollout.
+PK_CONNECTOR_SECRET_ENCRYPTION_KEY=<current base64 key>
 PK_EMBED_TOKEN_SECRET=<openssl rand -base64 48>
 PK_OBJECT_URL_SECRET=<openssl rand -base64 48>
 ```
 
-Use three distinct exact HTTPS origins on port 443 and generate every secret independently. Production startup rejects absent or unknown `NODE_ENV` values, HTTP/path-bearing origins, relative storage roots, malformed AES keys, secrets shorter than 32 bytes, common placeholder values, and reused secrets. Keep encryption keys recoverable through the secrets backup process; losing them makes encrypted TOTP and connector credentials unreadable.
+Use three distinct exact HTTPS origins on port 443 and generate every secret independently. Production startup rejects absent or unknown `NODE_ENV` values, HTTP/path-bearing origins, invalid storage backend settings, malformed AES keys, secrets shorter than 32 bytes, common placeholder values, and reused secrets. Keep encryption keys recoverable through the secrets backup process; losing them makes encrypted TOTP and connector credentials unreadable.
+
+`PK_WEBAPP_URL` is also the WebAuthn origin and relying-party source. Changing its hostname invalidates passkey authentication until users enroll credentials for the new relying party. TLS termination must preserve the configured public origin, and reverse-proxy rewrites must not expose the admin on additional origins.
 
 The demonstration seed requires both `NODE_ENV=development` and `PK_ALLOW_DEMO_SEED=true`, refuses to run in production, and does not reset an existing owner's password. Never put either demonstration flag in a production environment file. `PK_ENABLE_INSECURE_DEVELOPMENT=true` is an additional explicit gate for development-only bypass behavior and is also forbidden operationally in production.
 
 Production Compose provides secrets only to services that use them. Proof, render, and maintenance workers must not receive admin MFA, connector-encryption, embed-token, or object-URL signing secrets unless a reviewed feature creates a concrete need.
+
+### Media Sanitizer
+
+API and admin raster promotion depends on the private `media-sanitizer` service. Compose sets `PK_MEDIA_SANITIZER_URL=http://media-sanitizer:3003`; production validation permits cleartext HTTP only for that exact isolated service hostname. Do not publish port 3003 or attach the sanitizer container to the default/external network.
+
+The service has no database, object-storage, connector, or application secrets. It runs read-only as the unprivileged application user with dropped capabilities, a bounded temporary filesystem, one CPU, a 768 MiB memory ceiling, a PID ceiling, Sharp concurrency of one, and one active request. The caller enforces a 20-second timeout. Sanitization fully decodes one static PNG, JPEG, or WebP, rejects malformed/animated/oversized input, applies EXIF orientation, converts to sRGB, and re-encodes without source metadata. Only the re-encoded bytes enter trusted asset storage; rejected originals remain in the existing quarantine flow.
+
+For local development, run `bun run dev:media-sanitizer` alongside API and admin. Keep `PK_MEDIA_SANITIZER_URL=http://127.0.0.1:3003` in the development environment only.
+
+### Connector Wrapping-Key Rotation
+
+Connector and WooCommerce REST credentials use authenticated `v3` envelopes containing a wrapping-key ID and tenant/store/purpose-bound associated data. Existing unversioned REST ciphertext and `v2` webhook ciphertext remain readable only through the keyring entry named `legacy`.
+
+1. Deploy keyring-aware code with the current singular key still configured.
+2. Configure `PK_CONNECTOR_SECRET_ENCRYPTION_KEYS` with `legacy` and a newly generated key, set `PK_CONNECTOR_SECRET_ENCRYPTION_ACTIVE_KEY_ID` to the new key ID, and restart API and admin together.
+3. Preview one tenant without writes:
+
+```bash
+docker compose --env-file /etc/personalise-kings/production.env -f compose.production.yml run --rm web-admin \
+  bun run db:reencrypt-connector-secrets --merchant-id <merchant-id> --to-key-id wk_2026_07 --dry-run
+```
+
+4. Run that tenant without `--dry-run`, verify connector authentication and WooCommerce health, then migrate all tenants explicitly:
+
+```bash
+docker compose --env-file /etc/personalise-kings/production.env -f compose.production.yml run --rm web-admin \
+  bun run db:reencrypt-connector-secrets --all-tenants --to-key-id wk_2026_07 --batch-size 100
+```
+
+The command scans REST credentials, active/retired/revoked webhook keys, and the legacy Store mirror. It skips completed `v3` rows, conditionally updates unchanged ciphertext only, and creates one atomic `connector_secret.reencrypted` audit event per mutation. Any decrypt failure or concurrent replacement leaves the row untouched and exits non-zero. Re-run until the candidate count reaches zero.
+
+Keep `legacy` and historical wrapping keys until all live rows are migrated, the rollback window has passed, and backups containing old ciphertext have expired or have a documented restore-and-re-encrypt path. Removing a key earlier makes those records irrecoverable.
 
 ## Build And Rollout
 
@@ -55,6 +96,7 @@ From the checked-out, reviewed release revision:
 
 ```bash
 docker compose --env-file /etc/personalise-kings/production.env -f compose.production.yml build
+docker compose --env-file /etc/personalise-kings/production.env -f compose.production.yml up -d postgres redis media-sanitizer
 docker compose --env-file /etc/personalise-kings/production.env -f compose.production.yml run --rm migrate
 docker compose --env-file /etc/personalise-kings/production.env -f compose.production.yml up -d --no-deps web-admin customiser api worker-maintenance worker-render worker-proof
 docker compose --env-file /etc/personalise-kings/production.env -f compose.production.yml ps
@@ -80,9 +122,11 @@ Apply coordinated edge rate limits before exposing the API. Exempt orchestration
 
 ## Persistence
 
-`postgres-data` and `object-storage` are the only application data volumes. They must not be removed during routine deployments. The object volume must be mounted at `/data/personalise-kings/objects` in every storage-consuming service.
+In local mode, `postgres-data` and `object-storage` are the only application data volumes. They must not be removed during routine deployments. The object volume must be mounted at `/data/personalise-kings/objects` in every storage-consuming service.
 
 The local object backend is suitable only for the initial single-host deployment. Do not run application containers on separate hosts against unsynchronised filesystems. Monitor free space, inode usage, PostgreSQL growth, failed proof jobs, and deletion requests awaiting backup purge confirmation.
+
+For S3-compatible storage, set `OBJECT_STORAGE_BACKEND=s3`, `OBJECT_STORAGE_S3_BUCKET`, and `OBJECT_STORAGE_S3_REGION`. Set `OBJECT_STORAGE_S3_ENDPOINT` only for a compatible non-AWS endpoint; production requires HTTPS. Set `OBJECT_STORAGE_S3_FORCE_PATH_STYLE=true` only when the provider requires path-style addressing. Supply credentials through an IAM task/instance role where possible, or the standard `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and optional `AWS_SESSION_TOKEN` variables. Every storage-consuming service needs the same backend settings and bucket access. Grant only `s3:PutObject`, `s3:GetObject`, `s3:DeleteObject`, and `s3:ListBucket`/bucket-head access for the configured bucket, enforce encryption and block public access at the bucket policy, and configure versioning/lifecycle rules as part of the backup policy. Browser uploads and downloads continue through short-lived application-signed API URLs; the bucket does not require public access or browser CORS.
 
 See [`BACKUP_AND_RESTORE.md`](BACKUP_AND_RESTORE.md) before storing production data.
 
@@ -94,6 +138,14 @@ See [`BACKUP_AND_RESTORE.md`](BACKUP_AND_RESTORE.md) before storing production d
 - Workers emit bounded `pk.worker.polls` heartbeat metrics and also rely on process restart policy and queue-age monitoring; configure the external absence alert before deployment.
 
 The maintenance worker emits capped structured reconciliation counts every cleanup interval. Alert on non-zero running print jobs, old queued print jobs, duplicate groups in the recent print-job sample, unprocessed webhooks, invalid ready proofs, invalid deletion timestamps, and sustained growth or age of the pending platform outbox. Pending platform outbox events are expected until a real dispatcher is implemented, so monitor trend and oldest age rather than treating every row as a delivery failure.
+
+Connector event HTTP success means the authenticated envelope was durably committed to `WebhookDelivery`; it does not mean order processing completed in the request. The maintenance worker claims due inbox rows with random tokens and processes order, line-item, print lifecycle, audit, and platform-outbox changes in one serializable transaction. Failed transient attempts retry from 15 seconds up to 15 minutes and become terminal after ten attempts. Invalid stored envelopes and invalid customisation references fail immediately. Claims older than 15 minutes are reclaimed with a new token, and stale workers cannot complete or reschedule them.
+
+Alert on `pk.connector.inbox.backlog.failed` above zero, sustained growth in `pk.connector.inbox.backlog.pending`, and repeated failed `pk.connector.inbox.wakeups`. Terminal rows retain a bounded error for operator investigation. BullMQ jobs contain only a `WebhookDelivery` ID, run once without broker retries, and are removed immediately. API enqueue failure never rolls back a receipt; the maintenance worker polls PostgreSQL unconditionally and republishes bounded due work, so Redis flushes, restarts, or prolonged outages cannot lose or alter inbox state or retry ownership.
+
+The Redis container is digest-pinned, unexposed, attached only to the internal connector queue network, configured with `noeviction`, and has AOF and snapshots disabled. It has no persistent volume by design. Do not place business payloads, retry schedules, attempt counts, or completion state in Redis. Rebuilding it must be operationally safe at any time.
+
+WooCommerce connector `0.13.0` keeps privacy-bounded diagnostics locally in WordPress. Review **WooCommerce > PersonaliseKings** and **Tools > Site Health** for queue backlog, stale claims, scheduler state, API liveness, and 14-day delivery/failure counters. Site Health sends only a credential-free `GET /health` with a neutral connector user agent. Debug information excludes endpoint hosts, store/key/order/product IDs, payloads, customisation references, response bodies, and credentials. Resetting diagnostics deletes counters only; it never alters the durable outbox or connector configuration. Delivered/superseded rows retain for 30 days, failed/cancelled rows retain for 90 days, and active rows do not expire.
 
 Production artifact cleanup retains database metadata after deleting live object bytes. Alert on artifacts with old `cleanupClaimedAt` values or repeated `lastCleanupError` values. A failed or ambiguous delete remains unavailable to downloads until stale-claim recovery retries the idempotent object removal and finalizes metadata. Backup rotation remains a separate operational process.
 

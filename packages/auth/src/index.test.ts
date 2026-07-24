@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decryptConnectorSecret, decryptStoreWebhookSecret, decryptTotpSecret, encryptConnectorSecret, encryptStoreWebhookSecret, encryptTotpSecret, generateRecoveryCodes, generateSessionToken, hashPassword, hashRecoveryCode, hashSessionToken, normalizeRecoveryCode, roleCan, signEmbedToken, verifyEmbedToken, verifyPassword, verifyTotp } from "./index";
+import { connectorCiphertextKeyId, decryptConnectorSecret, decryptStoreWebhookSecret, decryptTotpSecret, decryptVersionedConnectorSecret, encryptConnectorSecret, encryptStoreWebhookSecret, encryptTotpSecret, encryptVersionedConnectorSecret, generateRecoveryCodes, generateSessionToken, hashPassword, hashRecoveryCode, hashSessionToken, normalizeRecoveryCode, roleCan, signEmbedToken, verifyEmbedToken, verifyPassword, verifyTotp } from "./index";
 
 describe("password hashing", () => {
   it("verifies the original password and rejects a different password", async () => {
@@ -133,5 +133,57 @@ describe("connector secret encryption", () => {
     expect(encrypted).not.toContain("store-secret");
     expect(decryptConnectorSecret(encrypted, key)).toBe("store-secret");
     expect(decryptConnectorSecret(encrypted, Buffer.alloc(32, 8).toString("base64"))).toBeNull();
+  });
+
+  it("selects and authenticates versioned wrapping keys and record context", () => {
+    const keyring = {
+      activeKeyId: "wk_2026_07",
+      keys: {
+        legacy: Buffer.alloc(32, 6).toString("base64"),
+        wk_2026_07: Buffer.alloc(32, 7).toString("base64")
+      }
+    };
+    const context = { purpose: "woocommerce-rest" as const, merchantId: "merchant-1", storeId: "store-1" };
+    const encrypted = encryptVersionedConnectorSecret("store-secret", keyring, context);
+    expect(encrypted).toMatch(/^connector-aes-256-gcm:v3:wk_2026_07:/);
+    expect(connectorCiphertextKeyId(encrypted)).toBe("wk_2026_07");
+    expect(decryptVersionedConnectorSecret(encrypted, keyring, context)).toBe("store-secret");
+    expect(decryptVersionedConnectorSecret(encrypted, keyring, { ...context, merchantId: "merchant-2" })).toBeNull();
+    expect(decryptVersionedConnectorSecret(encrypted, { activeKeyId: "legacy", keys: { legacy: keyring.keys.legacy } }, context)).toBeNull();
+  });
+
+  it("binds versioned webhook secrets to tenant, store, signing key, and purpose", () => {
+    const keyring = { activeKeyId: "next", keys: { next: Buffer.alloc(32, 8).toString("base64") } };
+    const context = { purpose: "store-webhook" as const, merchantId: "merchant-1", storeId: "store-1", signingKeyId: "key-1" };
+    const encrypted = encryptVersionedConnectorSecret("webhook-secret", keyring, context);
+    expect(decryptVersionedConnectorSecret(encrypted, keyring, context)).toBe("webhook-secret");
+    expect(decryptVersionedConnectorSecret(encrypted, keyring, { ...context, signingKeyId: "key-2" })).toBeNull();
+    expect(decryptVersionedConnectorSecret(encrypted, keyring, { purpose: "woocommerce-rest", merchantId: "merchant-1", storeId: "store-1" })).toBeNull();
+  });
+
+  it("reads legacy formats only through the designated legacy key", () => {
+    const legacyKey = Buffer.alloc(32, 9).toString("base64");
+    const context = { purpose: "woocommerce-rest" as const, merchantId: "merchant-1", storeId: "store-1" };
+    const encrypted = encryptConnectorSecret("legacy-secret", legacyKey);
+    expect(connectorCiphertextKeyId(encrypted)).toBe("legacy");
+    expect(decryptVersionedConnectorSecret(encrypted, { activeKeyId: "next", keys: { legacy: legacyKey, next: Buffer.alloc(32, 10).toString("base64") } }, context)).toBe("legacy-secret");
+    expect(decryptVersionedConnectorSecret(encrypted, { activeKeyId: "next", keys: { next: legacyKey } }, context)).toBeNull();
+
+    const webhookContext = { purpose: "store-webhook" as const, merchantId: "merchant-1", storeId: "store-1", signingKeyId: "key-1" };
+    const legacyWebhook = encryptStoreWebhookSecret("legacy-webhook", legacyKey, "store-1", "key-1");
+    expect(decryptVersionedConnectorSecret(
+      legacyWebhook,
+      { activeKeyId: "next", keys: { legacy: legacyKey, next: Buffer.alloc(32, 10).toString("base64") } },
+      webhookContext
+    )).toBe("legacy-webhook");
+  });
+
+  it("rejects tampered versioned envelopes", () => {
+    const keyring = { activeKeyId: "next", keys: { next: Buffer.alloc(32, 11).toString("base64") } };
+    const context = { purpose: "woocommerce-rest" as const, merchantId: "merchant-1", storeId: "store-1" };
+    const encrypted = encryptVersionedConnectorSecret("secret", keyring, context);
+    expect(decryptVersionedConnectorSecret(encrypted.replace(":next:", ":missing:"), keyring, context)).toBeNull();
+    expect(decryptVersionedConnectorSecret(`${encrypted}x`, keyring, context)).toBeNull();
+    expect(decryptVersionedConnectorSecret(`${encrypted}:extra`, keyring, context)).toBeNull();
   });
 });

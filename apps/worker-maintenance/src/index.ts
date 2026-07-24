@@ -6,6 +6,9 @@ import { reconcileQueues } from "./reconciliation";
 import { cleanupExpiredGeneratedArtifacts } from "./artifact-cleanup";
 import { runOperationalChecks } from "./operational-checks";
 import { processOperationalAlertDeliveries } from "./alert-delivery";
+import { processConnectorInbox } from "./connector-inbox";
+import { processConnectorDelivery, reconcileConnectorWakeups } from "./connector-inbox";
+import { closeConnectorWakeups, startConnectorWakeupWorker } from "@personalise-kings/connector-processing";
 import { logEvent, serializeError } from "@personalise-kings/observability";
 import { addCounter, initializeTelemetry, recordHistogram, shutdownTelemetry, SpanStatusCode, withSpan } from "@personalise-kings/observability/telemetry";
 
@@ -168,7 +171,10 @@ async function cleanupExpiredAdminSecurityRecords() {
     prisma.adminSession.deleteMany({
       where: { OR: [{ expiresAt: { lt: now } }, { revokedAt: { lt: usedCodeCutoff } }] }
     }),
-    prisma.staffRecoveryCode.deleteMany({ where: { usedAt: { lt: usedCodeCutoff } } })
+    prisma.staffRecoveryCode.deleteMany({ where: { usedAt: { lt: usedCodeCutoff } } }),
+    prisma.adminWebAuthnChallenge.deleteMany({
+      where: { OR: [{ expiresAt: { lt: now } }, { consumedAt: { lt: usedCodeCutoff } }] }
+    })
   ]);
 }
 
@@ -177,6 +183,8 @@ async function loop() {
   const startedAt = performance.now();
   let outcome = "succeeded";
   try {
+    await runMaintenanceTask("reconcile_connector_wakeups", reconcileConnectorWakeups);
+    await runMaintenanceTask("process_connector_inbox", processConnectorInbox);
     await runMaintenanceTask("process_deletion_request", processNextDeletionRequest);
     if (Date.now() - lastCleanupAt > cleanupIntervalMs) {
       lastCleanupAt = Date.now();
@@ -192,7 +200,7 @@ async function loop() {
   } finally {
     addCounter("pk.worker.polls", 1, { worker: "maintenance", outcome });
     recordHistogram("pk.worker.poll.duration", (performance.now() - startedAt) / 1000, { worker: "maintenance", outcome });
-    if (!stopping) setTimeout(() => void loop(), pollIntervalMs);
+    if (!stopping) setTimeout(() => void trackOperation(loop()), pollIntervalMs);
   }
 }
 
@@ -252,17 +260,25 @@ function positiveIntegerFromEnv(name: string, fallback: number) {
 
 validateServiceEnvironment("worker-maintenance");
 await initializeTelemetry("personalise-kings-worker-maintenance");
+const connectorWakeupsEnabled = startConnectorWakeupWorker(processConnectorDelivery);
 console.log("PersonaliseKings maintenance worker started");
+console.log(`Connector BullMQ wake-ups ${connectorWakeupsEnabled ? "enabled" : "disabled"}; PostgreSQL polling remains authoritative`);
 console.warn("Outbox dispatcher is not configured; events will remain pending");
+let shutdownPromise: Promise<void> | null = null;
 async function shutdown() {
+  if (shutdownPromise) return shutdownPromise;
   stopping = true;
-  await Promise.allSettled([...activeOperations]);
-  await shutdownTelemetry().catch(() => undefined);
-  await prisma.$disconnect().catch(() => undefined);
-  process.exit(0);
+  shutdownPromise = (async () => {
+    await closeConnectorWakeups();
+    await Promise.allSettled([...activeOperations]);
+    await shutdownTelemetry().catch(() => undefined);
+    await prisma.$disconnect().catch(() => undefined);
+    process.exitCode = 0;
+  })();
+  return shutdownPromise;
 }
 process.once("SIGINT", () => void shutdown());
 process.once("SIGTERM", () => void shutdown());
-void loop();
+void trackOperation(loop());
 void operationalLoop();
 void alertDeliveryLoop();

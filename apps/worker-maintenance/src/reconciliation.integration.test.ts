@@ -124,7 +124,8 @@ describe.skipIf(!integrationEnabled)("queue reconciliation with PostgreSQL", () 
       getObject: vi.fn(),
       putObject: vi.fn(),
       createSignedGetUrl: vi.fn(),
-      createSignedPutUrl: vi.fn()
+      createSignedPutUrl: vi.fn(),
+      checkHealth: vi.fn()
     };
 
     const first = await cleanupExpiredGeneratedArtifacts({ merchantId: available.merchantId, now, batchSize: 20, storage });
@@ -163,7 +164,8 @@ describe.skipIf(!integrationEnabled)("queue reconciliation with PostgreSQL", () 
       getObject: vi.fn(),
       putObject: vi.fn(),
       createSignedGetUrl: vi.fn(),
-      createSignedPutUrl: vi.fn()
+      createSignedPutUrl: vi.fn(),
+      checkHealth: vi.fn()
     };
 
     const deleted = await cleanupExpiredGeneratedArtifacts({ merchantId: fixture.merchantId, now, batchSize: 20, storage });

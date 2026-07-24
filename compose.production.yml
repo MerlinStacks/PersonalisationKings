@@ -12,8 +12,23 @@ x-runtime-environment: &runtime-environment
   OTEL_METRIC_EXPORT_INTERVAL_MS: ${OTEL_METRIC_EXPORT_INTERVAL_MS:-60000}
 
 x-storage-environment: &storage-environment
+  OBJECT_STORAGE_BACKEND: ${OBJECT_STORAGE_BACKEND:-local}
   OBJECT_STORAGE_ROOT: /data/personalise-kings/objects
   OBJECT_STORAGE_MAX_BYTES: ${OBJECT_STORAGE_MAX_BYTES:-26214400}
+  OBJECT_STORAGE_S3_BUCKET: ${OBJECT_STORAGE_S3_BUCKET:-}
+  OBJECT_STORAGE_S3_REGION: ${OBJECT_STORAGE_S3_REGION:-}
+  OBJECT_STORAGE_S3_ENDPOINT: ${OBJECT_STORAGE_S3_ENDPOINT:-}
+  OBJECT_STORAGE_S3_FORCE_PATH_STYLE: ${OBJECT_STORAGE_S3_FORCE_PATH_STYLE:-false}
+  AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+  AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+  AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+
+x-media-sanitizer-client: &media-sanitizer-client
+  PK_MEDIA_SANITIZER_URL: http://media-sanitizer:3003
+  PK_MEDIA_SANITIZER_TIMEOUT_MS: ${PK_MEDIA_SANITIZER_TIMEOUT_MS:-20000}
+
+x-connector-wakeup-client: &connector-wakeup-client
+  PK_CONNECTOR_WAKEUP_REDIS_URL: redis://redis:6379/0
 
 x-app-security: &app-security
   init: true
@@ -48,6 +63,28 @@ services:
     security_opt:
       - no-new-privileges:true
 
+  redis:
+    image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
+    user: redis
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "128mb", "--maxmemory-policy", "noeviction"]
+    read_only: true
+    tmpfs:
+      - /data:size=16m,noexec,nosuid,nodev
+    mem_limit: 192m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - connector-queue
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
   migrate:
     build: *app-build
     environment:
@@ -67,14 +104,16 @@ services:
     <<: *app-security
     build: *app-build
     environment:
-      <<: [*runtime-environment, *storage-environment]
+      <<: [*runtime-environment, *storage-environment, *media-sanitizer-client]
       PORT: 3000
       PK_WEBAPP_URL: ${PK_WEBAPP_URL:?PK_WEBAPP_URL is required}
       PK_CUSTOMISER_URL: ${PK_CUSTOMISER_URL:?PK_CUSTOMISER_URL is required}
       PK_API_URL: ${PK_API_URL:?PK_API_URL is required}
       PK_ADMIN_MFA_ENCRYPTION_KEY: ${PK_ADMIN_MFA_ENCRYPTION_KEY:?PK_ADMIN_MFA_ENCRYPTION_KEY is required}
       PK_ADMIN_RECOVERY_CODE_PEPPER: ${PK_ADMIN_RECOVERY_CODE_PEPPER:?PK_ADMIN_RECOVERY_CODE_PEPPER is required}
-      PK_CONNECTOR_SECRET_ENCRYPTION_KEY: ${PK_CONNECTOR_SECRET_ENCRYPTION_KEY:?PK_CONNECTOR_SECRET_ENCRYPTION_KEY is required}
+      PK_CONNECTOR_SECRET_ENCRYPTION_KEY: ${PK_CONNECTOR_SECRET_ENCRYPTION_KEY:-}
+      PK_CONNECTOR_SECRET_ENCRYPTION_ACTIVE_KEY_ID: ${PK_CONNECTOR_SECRET_ENCRYPTION_ACTIVE_KEY_ID:-}
+      PK_CONNECTOR_SECRET_ENCRYPTION_KEYS: ${PK_CONNECTOR_SECRET_ENCRYPTION_KEYS:-}
       PK_EMBED_TOKEN_SECRET: ${PK_EMBED_TOKEN_SECRET:?PK_EMBED_TOKEN_SECRET is required}
       PK_OBJECT_URL_SECRET: ${PK_OBJECT_URL_SECRET:?PK_OBJECT_URL_SECRET is required}
     command: ["bun", "--filter", "@personalise-kings/web-admin", "start"]
@@ -85,6 +124,11 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+      media-sanitizer:
+        condition: service_healthy
+    networks:
+      - default
+      - media-sanitizer
     healthcheck:
       test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 15s
@@ -116,12 +160,14 @@ services:
     <<: *app-security
     build: *app-build
     environment:
-      <<: [*runtime-environment, *storage-environment]
+      <<: [*runtime-environment, *storage-environment, *media-sanitizer-client, *connector-wakeup-client]
       PORT: 3002
       PK_WEBAPP_URL: ${PK_WEBAPP_URL:?PK_WEBAPP_URL is required}
       PK_CUSTOMISER_URL: ${PK_CUSTOMISER_URL:?PK_CUSTOMISER_URL is required}
       PK_API_URL: ${PK_API_URL:?PK_API_URL is required}
-      PK_CONNECTOR_SECRET_ENCRYPTION_KEY: ${PK_CONNECTOR_SECRET_ENCRYPTION_KEY:?PK_CONNECTOR_SECRET_ENCRYPTION_KEY is required}
+      PK_CONNECTOR_SECRET_ENCRYPTION_KEY: ${PK_CONNECTOR_SECRET_ENCRYPTION_KEY:-}
+      PK_CONNECTOR_SECRET_ENCRYPTION_ACTIVE_KEY_ID: ${PK_CONNECTOR_SECRET_ENCRYPTION_ACTIVE_KEY_ID:-}
+      PK_CONNECTOR_SECRET_ENCRYPTION_KEYS: ${PK_CONNECTOR_SECRET_ENCRYPTION_KEYS:-}
       PK_EMBED_TOKEN_SECRET: ${PK_EMBED_TOKEN_SECRET:?PK_EMBED_TOKEN_SECRET is required}
       PK_OBJECT_URL_SECRET: ${PK_OBJECT_URL_SECRET:?PK_OBJECT_URL_SECRET is required}
       PK_CONNECTOR_REPLAY_WINDOW_SECONDS: ${PK_CONNECTOR_REPLAY_WINDOW_SECONDS:-300}
@@ -134,8 +180,37 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+      media-sanitizer:
+        condition: service_healthy
+    networks:
+      - default
+      - media-sanitizer
+      - connector-queue
     healthcheck:
       test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:3002/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  media-sanitizer:
+    <<: *app-security
+    build: *app-build
+    environment:
+      NODE_ENV: production
+      PORT: 3003
+      MEDIA_SANITIZER_MAX_OUTPUT_BYTES: ${OBJECT_STORAGE_MAX_BYTES:-26214400}
+    command: ["bun", "apps/media-sanitizer/src/server.ts"]
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid,nodev
+    mem_limit: 768m
+    cpus: 1.0
+    pids_limit: 128
+    networks:
+      - media-sanitizer
+    healthcheck:
+      test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:3003/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -145,7 +220,7 @@ services:
     <<: *app-security
     build: *app-build
     environment:
-      <<: [*runtime-environment, *storage-environment]
+      <<: [*runtime-environment, *storage-environment, *connector-wakeup-client]
       MAINTENANCE_POLL_INTERVAL_MS: ${MAINTENANCE_POLL_INTERVAL_MS:-5000}
       CLEANUP_INTERVAL_MS: ${CLEANUP_INTERVAL_MS:-60000}
       PROOF_JOB_MAX_ATTEMPTS: ${PROOF_JOB_MAX_ATTEMPTS:-5}
@@ -158,6 +233,9 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+    networks:
+      - default
+      - connector-queue
 
   worker-render:
     <<: *app-security
@@ -194,3 +272,9 @@ services:
 volumes:
   postgres-data:
   object-storage:
+
+networks:
+  media-sanitizer:
+    internal: true
+  connector-queue:
+    internal: true

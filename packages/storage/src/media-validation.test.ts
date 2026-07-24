@@ -1,32 +1,48 @@
-import { describe, expect, it } from "vitest";
-import { validateRasterUpload } from "./media-validation";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { sanitizeRasterUpload } from "./media-validation";
 
-describe("validateRasterUpload", () => {
-  it("accepts a PNG with dimensions", () => {
-    const bytes = new Uint8Array(33);
-    bytes.set([0x89, 0x50, 0x4e, 0x47], 0);
-    bytes.set([0x00, 0x00, 0x00, 0x64], 16);
-    bytes.set([0x00, 0x00, 0x00, 0x32], 20);
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
-    expect(validateRasterUpload(bytes)).toMatchObject({
+describe("sanitizeRasterUpload", () => {
+  it("returns trusted sanitized bytes and dimensions", async () => {
+    const output = new Uint8Array([1, 2, 3]);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(output, {
+      headers: {
+        "content-type": "image/png",
+        "content-length": String(output.byteLength),
+        "x-pk-image-width": "100",
+        "x-pk-image-height": "50"
+      }
+    })));
+
+    await expect(sanitizeRasterUpload(new Uint8Array([9]))).resolves.toEqual({
       accepted: true,
+      bytes: output,
       detectedContentType: "image/png",
       widthPx: 100,
       heightPx: 50
     });
   });
 
-  it("rejects SVG-like text", () => {
-    const bytes = new TextEncoder().encode("<svg><script>alert(1)</script></svg>");
-    expect(validateRasterUpload(bytes).accepted).toBe(false);
+  it("returns decoder rejections without trusting input headers", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ error: "Image could not be safely decoded" }, { status: 422 })));
+    await expect(sanitizeRasterUpload(new TextEncoder().encode("<svg/>"))).resolves.toEqual({
+      accepted: false,
+      reason: "Image could not be safely decoded"
+    });
   });
 
-  it("rejects oversized PNG dimensions", () => {
-    const bytes = new Uint8Array(33);
-    bytes.set([0x89, 0x50, 0x4e, 0x47], 0);
-    bytes.set([0x00, 0x00, 0x4e, 0x21], 16);
-    bytes.set([0x00, 0x00, 0x00, 0x64], 20);
+  it("rejects empty input before contacting the service", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(sanitizeRasterUpload(new Uint8Array())).resolves.toMatchObject({ accepted: false });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 
-    expect(validateRasterUpload(bytes).accepted).toBe(false);
+  it("fails closed on malformed successful responses", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new Uint8Array([1]), { headers: { "content-type": "text/plain", "content-length": "1" } })));
+    await expect(sanitizeRasterUpload(new Uint8Array([9]))).rejects.toThrow(/invalid metadata/);
   });
 });

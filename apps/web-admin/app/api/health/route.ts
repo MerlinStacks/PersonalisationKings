@@ -1,14 +1,12 @@
-import { access, constants, mkdir } from "node:fs/promises";
 import { prisma } from "@personalise-kings/db";
+import { createObjectStorageFromEnv } from "@personalise-kings/storage";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {
     await prisma.$queryRaw`SELECT 1`;
-    const storageRoot = process.env.OBJECT_STORAGE_ROOT ?? "./storage";
-    await mkdir(storageRoot, { recursive: true });
-    await access(storageRoot, constants.R_OK | constants.W_OK);
+    await createObjectStorageFromEnv().checkHealth();
     return Response.json({ ok: true, service: "personalise-kings-web-admin" }, { headers: { "cache-control": "no-store" } });
   } catch {
     return Response.json(

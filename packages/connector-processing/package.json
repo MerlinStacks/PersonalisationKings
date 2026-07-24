@@ -1,0 +1,24 @@
+{
+  "name": "@personalise-kings/connector-processing",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@personalise-kings/connector-contracts": "workspace:*",
+    "@personalise-kings/db": "workspace:*",
+    "@personalise-kings/observability": "workspace:*",
+    "@prisma/client": "^6.19.0",
+    "bullmq": "5.81.0",
+    "ioredis": "5.11.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.2",
+    "vitest": "^4.0.15"
+  }
+}

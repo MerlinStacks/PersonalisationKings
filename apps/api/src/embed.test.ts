@@ -1,6 +1,6 @@
 import { defaultCustomiserConfig, type SceneGraph } from "@personalise-kings/render-schema";
 import { describe, expect, it } from "vitest";
-import { chooseProductMapping, revisionCanResume, sceneMatchesDesign } from "./embed";
+import { chooseProductMapping, imageAssetMatchesRule, revisionCanResume, sceneMatchesDesign } from "./embed";
 
 const template: SceneGraph = {
   schemaVersion: "scene-graph.v1",
@@ -138,5 +138,30 @@ describe("chooseProductMapping", () => {
 
   it("lets an inactive exact mapping explicitly block the fallback", () => {
     expect(chooseProductMapping([fallback, { ...exact, active: false }], "variant-1")).toBeNull();
+  });
+});
+
+describe("imageAssetMatchesRule", () => {
+  const config = defaultCustomiserConfig(template);
+  const rule = config.layers[1];
+  if (rule?.type !== "image") throw new Error("Invalid fixture");
+  rule.maximumUploadBytes = 1_000_000;
+
+  it("prevents an upload accepted for one layer from bypassing a stricter layer limit", () => {
+    expect(imageAssetMatchesRule(
+      { contentType: "image/png", byteSize: 1_000_001n, asset: { kind: "upload" } },
+      rule
+    )).toBe(false);
+    expect(imageAssetMatchesRule(
+      { contentType: "image/png", byteSize: 1_000_000n, asset: { kind: "upload" } },
+      rule
+    )).toBe(true);
+  });
+
+  it("continues enforcing the destination layer content types", () => {
+    expect(imageAssetMatchesRule(
+      { contentType: "image/webp", byteSize: 100n, asset: { kind: "upload" } },
+      { ...rule, acceptedContentTypes: ["image/png"] }
+    )).toBe(false);
   });
 });

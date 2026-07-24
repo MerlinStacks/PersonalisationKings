@@ -27,6 +27,8 @@ env:
   PK_OBJECT_URL_SECRET: ci-only-object-url-secret
   PK_DEMO_CONNECTOR_SECRET: ci-only-connector-secret
   PK_RUN_DATABASE_INTEGRATION_TESTS: "true"
+  PK_CONNECTOR_WAKEUP_REDIS_URL: redis://127.0.0.1:6379/15
+  PK_RUN_REDIS_INTEGRATION_TESTS: "true"
 
 jobs:
   validate:
@@ -44,6 +46,15 @@ jobs:
           - 5432:5432
         options: >-
           --health-cmd "pg_isready -U personalise_kings -d personalise_kings"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
@@ -84,7 +95,7 @@ jobs:
         run: |
           git ls-files '*.php' | xargs -r -n1 php -l
           git ls-files 'apps/woocommerce-connector/assets/*.js' | xargs -r -n1 node --check
-          php apps/woocommerce-connector/tests/mapping-state.php
+          git ls-files 'apps/woocommerce-connector/tests/*.php' | xargs -r -n1 php
 
       - name: Typecheck
         run: bun run typecheck

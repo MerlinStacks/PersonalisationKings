@@ -106,6 +106,11 @@ enum OperationalAlertDeliveryStatus {
   failed
 }
 
+enum WebAuthnCeremony {
+  registration
+  authentication
+}
+
 model Merchant {
   id               String                 @id @default(cuid())
   name             String
@@ -152,9 +157,45 @@ model StaffUser {
   merchant     Merchant  @relation(fields: [merchantId], references: [id], onDelete: Cascade)
   adminSessions AdminSession[]
   recoveryCodes StaffRecoveryCode[]
+  passkeys StaffPasskey[]
+  webAuthnChallenges AdminWebAuthnChallenge[]
 
+  @@unique([id, merchantId])
   @@unique([merchantId, email])
   @@index([merchantId, role])
+}
+
+model StaffPasskey {
+  id               String    @id @default(cuid())
+  merchantId       String
+  staffUserId      String
+  credentialId     String    @unique @db.VarChar(1024)
+  publicKey         Bytes
+  counter           BigInt
+  transports        String[]  @default([])
+  deviceType        String
+  backedUp          Boolean
+  name              String    @db.VarChar(100)
+  createdAt         DateTime  @default(now())
+  lastUsedAt        DateTime?
+  staffUser         StaffUser @relation(fields: [staffUserId, merchantId], references: [id, merchantId], onDelete: Cascade)
+
+  @@index([merchantId, staffUserId, createdAt])
+}
+
+model AdminWebAuthnChallenge {
+  id          String           @id
+  merchantId  String?
+  staffUserId String?
+  ceremony    WebAuthnCeremony
+  challenge   String           @unique @db.VarChar(256)
+  createdAt   DateTime         @default(now())
+  expiresAt   DateTime
+  consumedAt  DateTime?
+  staffUser   StaffUser?       @relation(fields: [staffUserId, merchantId], references: [id, merchantId], onDelete: Cascade)
+
+  @@index([expiresAt, consumedAt])
+  @@index([staffUserId, ceremony, expiresAt])
 }
 
 model AdminSession {
@@ -626,6 +667,12 @@ model WebhookDelivery {
   nonce               String
   contentDigest       String
   rawPayload          Json
+  status              WebhookDeliveryStatus @default(pending)
+  attempts            Int       @default(0)
+  nextAttemptAt       DateTime  @default(now())
+  claimedAt           DateTime?
+  claimToken          String?
+  correlationId       String?
   processedAt         DateTime?
   processingStartedAt DateTime?
   failedAt            DateTime?
@@ -638,6 +685,16 @@ model WebhookDelivery {
   @@unique([storeId, nonce])
   @@index([merchantId, processedAt])
   @@index([processedAt, receivedAt])
+  @@index([status, nextAttemptAt, receivedAt])
+  @@index([status, claimedAt])
+  @@index([merchantId, status, receivedAt])
+}
+
+enum WebhookDeliveryStatus {
+  pending
+  processing
+  processed
+  failed
 }
 
 model OutboxEvent {

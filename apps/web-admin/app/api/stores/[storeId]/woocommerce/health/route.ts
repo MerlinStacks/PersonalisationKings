@@ -3,7 +3,7 @@ import { notFound, ok } from "../../../../../../lib/api";
 import { writeAuditEvent } from "../../../../../../lib/audit";
 import { requirePermission } from "../../../../../../lib/rbac";
 import { requireSameOrigin } from "../../../../../../lib/same-origin";
-import { checkWooCommerceCredentials, connectorEncryptionKey, decryptWooCommerceCredentials } from "../../../../../../lib/woocommerce";
+import { checkWooCommerceCredentials, connectorEncryptionKeys, decryptWooCommerceCredentials } from "../../../../../../lib/woocommerce";
 
 export async function POST(request: Request, { params }: Readonly<{ params: Promise<{ storeId: string }> }>) {
   const originError = requireSameOrigin(request);
@@ -23,7 +23,12 @@ export async function POST(request: Request, { params }: Readonly<{ params: Prom
 
   let credentials;
   try {
-    credentials = decryptWooCommerceCredentials(store.credential.encryptedPayload, connectorEncryptionKey());
+    credentials = decryptWooCommerceCredentials(
+      store.credential.encryptedPayload,
+      connectorEncryptionKeys(),
+      access.session.merchantId,
+      store.id
+    );
   } catch {
     return ok({ error: "credential_storage_unavailable", message: "Store credential encryption is not configured" }, { status: 503 });
   }

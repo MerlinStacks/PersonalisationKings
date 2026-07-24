@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => {
 vi.mock("@personalise-kings/db", () => ({ prisma: { $transaction: mocks.transaction } }));
 vi.mock("@personalise-kings/storage", () => ({
   createObjectStorageFromEnv: () => ({ createSignedPutUrl: mocks.createSignedPutUrl }),
+  objectStorageMaximumBytesFromEnv: () => 50 * 1024 * 1024,
   objectKey: (_storageClass: string, merchantId: string, id: string) => `temporary_upload/${merchantId}/${id}`
 }));
 vi.mock("../../../../lib/rbac", () => ({ requirePermission: mocks.requirePermission }));
@@ -58,5 +59,16 @@ describe("asset upload-intent auditing", () => {
         targetId: "version-1"
       })
     });
+  });
+
+  it("rejects non-raster content for image asset kinds", async () => {
+    const response = await POST(new Request("https://admin.example/api/assets/upload-intents", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ kind: "artwork", name: "Unsafe", contentType: "image/svg+xml", byteSize: 1024 })
+    }));
+
+    expect(response.status).toBe(400);
+    expect(mocks.transaction).not.toHaveBeenCalled();
   });
 });

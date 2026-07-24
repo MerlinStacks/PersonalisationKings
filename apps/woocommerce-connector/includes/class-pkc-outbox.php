@@ -20,6 +20,7 @@ class PKC_Outbox {
     public const STATUS_SUPERSEDED = 'superseded';
 
     private const OPTION_DB_VERSION = 'pkc_db_version';
+    private const OPTION_SCHEMA_CHECKED_AT = 'pkc_outbox_schema_checked_at';
     private const OPTION_LAST_CLEANUP = 'pkc_outbox_last_cleanup';
     private const OPTION_PENDING_QUARANTINE = 'pkc_outbox_pending_quarantine';
     private const CLAIM_TIMEOUT = 15 * MINUTE_IN_SECONDS;
@@ -152,10 +153,12 @@ class PKC_Outbox {
         }
         if ( '' === $migration_error && self::schema_is_valid( $table_name ) ) {
             update_option( self::OPTION_DB_VERSION, PKC_DB_VERSION, false );
+            update_option( self::OPTION_SCHEMA_CHECKED_AT, time(), false );
             delete_option( self::OPTION_PENDING_QUARANTINE );
             return true;
         }
         delete_option( self::OPTION_DB_VERSION );
+        delete_option( self::OPTION_SCHEMA_CHECKED_AT );
         return false;
     }
 
@@ -165,9 +168,14 @@ class PKC_Outbox {
     private function maybe_install(): bool {
         global $wpdb;
         $version_current = PKC_DB_VERSION === (string) get_option( self::OPTION_DB_VERSION, '' );
+        $recently_checked = (int) get_option( self::OPTION_SCHEMA_CHECKED_AT, 0 ) > time() - HOUR_IN_SECONDS;
+        if ( $version_current && $recently_checked ) {
+            return true;
+        }
         if ( ! $version_current || ! self::schema_is_valid( $wpdb->prefix . 'pkc_outbox' ) ) {
             return self::install();
         }
+        update_option( self::OPTION_SCHEMA_CHECKED_AT, time(), false );
         return true;
     }
 
@@ -282,7 +290,13 @@ class PKC_Outbox {
             )
         );
         if ( false === $inserted ) {
+            if ( class_exists( 'PKC_Observability' ) ) {
+                PKC_Observability::record( 'outbox', 'enqueue_failed' );
+            }
             return null;
+        }
+        if ( 1 === $inserted && class_exists( 'PKC_Observability' ) ) {
+            PKC_Observability::record( 'outbox', 'enqueued' );
         }
         return $this->get_by_identity( $identity_hash );
     }
@@ -434,6 +448,9 @@ class PKC_Outbox {
         if ( 1 !== $updated ) {
             return null;
         }
+        if ( class_exists( 'PKC_Observability' ) ) {
+            PKC_Observability::record( 'outbox', 'claimed' );
+        }
         return $this->get( $id );
     }
 
@@ -579,6 +596,9 @@ class PKC_Outbox {
                 $claim_token
             )
         );
+        if ( 1 === $updated && class_exists( 'PKC_Observability' ) ) {
+            PKC_Observability::record( 'delivery', 'retry' );
+        }
         return 1 === $updated ? $this->get( $id ) : null;
     }
 
@@ -614,6 +634,10 @@ class PKC_Outbox {
                 $claim_token
             )
         );
+        if ( 1 === $updated && class_exists( 'PKC_Observability' ) ) {
+            $outcome = self::STATUS_DELIVERED === $status ? 'success' : ( self::STATUS_SUPERSEDED === $status ? 'superseded' : 'failure' );
+            PKC_Observability::record( 'delivery', $outcome );
+        }
         return 1 === $updated;
     }
 
@@ -869,6 +893,69 @@ class PKC_Outbox {
     }
 
     /**
+     * Return payload-free live queue health aggregates.
+     *
+     * @return array<string, int|bool>
+     */
+    public function health_snapshot(): array {
+        $empty = array(
+            'available'      => false,
+            'pending'        => 0,
+            'processing'     => 0,
+            'failed'         => 0,
+            'due'            => 0,
+            'oldest_due_age' => 0,
+            'stale_claims'   => 0,
+            'last_cleanup'   => (int) get_option( self::OPTION_LAST_CLEANUP, 0 ),
+        );
+        if ( ! $this->available ) {
+            return $empty;
+        }
+        global $wpdb;
+        $now = gmdate( 'Y-m-d H:i:s' );
+        $stale_cutoff = gmdate( 'Y-m-d H:i:s', time() - self::CLAIM_TIMEOUT );
+        $row = $wpdb->get_row(
+            $wpdb->prepare(
+                "SELECT
+                    SUM(CASE WHEN status IN (%s, %s) THEN 1 ELSE 0 END) AS pending,
+                    SUM(CASE WHEN status = %s THEN 1 ELSE 0 END) AS processing,
+                    SUM(CASE WHEN status = %s THEN 1 ELSE 0 END) AS failed,
+                    SUM(CASE WHEN status IN (%s, %s) AND (next_attempt_gmt IS NULL OR next_attempt_gmt <= %s) THEN 1 ELSE 0 END) AS due_count,
+                    MIN(CASE WHEN status IN (%s, %s) AND (next_attempt_gmt IS NULL OR next_attempt_gmt <= %s) THEN COALESCE(next_attempt_gmt, created_at_gmt) ELSE NULL END) AS oldest_due,
+                    SUM(CASE WHEN status = %s AND (claimed_at_gmt IS NULL OR claimed_at_gmt < %s) THEN 1 ELSE 0 END) AS stale_claims
+                 FROM {$this->table_name}",
+                self::STATUS_PENDING,
+                self::STATUS_RETRY_WAIT,
+                self::STATUS_PROCESSING,
+                self::STATUS_FAILED,
+                self::STATUS_PENDING,
+                self::STATUS_RETRY_WAIT,
+                $now,
+                self::STATUS_PENDING,
+                self::STATUS_RETRY_WAIT,
+                $now,
+                self::STATUS_PROCESSING,
+                $stale_cutoff
+            ),
+            ARRAY_A
+        );
+        if ( ! is_array( $row ) ) {
+            return $empty;
+        }
+        $oldest_timestamp = ! empty( $row['oldest_due'] ) ? strtotime( (string) $row['oldest_due'] . ' UTC' ) : false;
+        return array(
+            'available'      => true,
+            'pending'        => (int) $row['pending'],
+            'processing'     => (int) $row['processing'],
+            'failed'         => (int) $row['failed'],
+            'due'            => (int) $row['due_count'],
+            'oldest_due_age' => false === $oldest_timestamp ? 0 : max( 0, time() - $oldest_timestamp ),
+            'stale_claims'   => (int) $row['stale_claims'],
+            'last_cleanup'   => (int) get_option( self::OPTION_LAST_CLEANUP, 0 ),
+        );
+    }
+
+    /**
      * Purge old terminal rows in bounded daily batches.
      */
     public function maybe_cleanup(): void {
@@ -911,6 +998,11 @@ class PKC_Outbox {
         }
         if ( $succeeded ) {
             update_option( self::OPTION_LAST_CLEANUP, time(), false );
+            if ( class_exists( 'PKC_Observability' ) ) {
+                PKC_Observability::record( 'cleanup', 'success' );
+            }
+        } elseif ( class_exists( 'PKC_Observability' ) ) {
+            PKC_Observability::record( 'cleanup', 'failure' );
         }
     }
 

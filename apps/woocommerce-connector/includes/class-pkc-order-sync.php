@@ -257,16 +257,18 @@ class PKC_Order_Sync {
                 true
             );
             if ( 0 !== $action_id ) {
+                PKC_Observability::record( 'scheduler', 'action_scheduler' );
                 return;
             }
         }
 
         if ( ! wp_next_scheduled( $hook ) ) {
-            wp_schedule_event(
+            $scheduled = wp_schedule_event(
                 time() + MINUTE_IN_SECONDS,
                 $recurrence,
                 $hook
             );
+            PKC_Observability::record( 'scheduler', false === $scheduled ? 'failure' : 'wp_cron' );
         }
     }
 
@@ -277,10 +279,12 @@ class PKC_Order_Sync {
         $this->dispatch_due_outbox();
         $this->outbox->maybe_cleanup();
         if ( ! $this->connector_is_configured() ) {
+            PKC_Observability::record( 'reconciliation', 'configuration_skipped' );
             return;
         }
         $lock_token = $this->acquire_reconciliation_lock();
         if ( null === $lock_token ) {
+            PKC_Observability::record( 'reconciliation', 'lock_skipped' );
             return;
         }
 
@@ -326,12 +330,14 @@ class PKC_Order_Sync {
             update_option( PKC_Settings::OPTION_LAST_RECONCILIATION, gmdate( 'c', $scan_started_at ), false );
             update_option( PKC_Settings::OPTION_LAST_RECONCILIATION_COUNT, $reconciled, false );
             delete_option( PKC_Settings::OPTION_RECONCILIATION_ERROR );
+            PKC_Observability::record( 'reconciliation', 'success' );
         } catch ( Throwable $error ) {
             update_option(
                 PKC_Settings::OPTION_RECONCILIATION_ERROR,
                 wp_strip_all_tags( $error->getMessage() ),
                 false
             );
+            PKC_Observability::record( 'reconciliation', 'failure' );
         } finally {
             $this->release_reconciliation_lock( $lock_token );
         }
@@ -653,6 +659,7 @@ class PKC_Order_Sync {
             $action_id = as_schedule_single_action( $timestamp, self::ACTION_PROCESS_OUTBOX, $arguments, self::ACTION_GROUP, true );
             if ( 0 !== $action_id ) {
                 $this->outbox->set_scheduled_action( (int) $row['id'], (int) $row['generation'], (int) $action_id );
+                PKC_Observability::record( 'scheduler', 'action_scheduler' );
                 return true;
             }
         }
@@ -663,6 +670,9 @@ class PKC_Order_Sync {
         $scheduled = false !== wp_schedule_single_event( $timestamp, self::ACTION_PROCESS_OUTBOX, $arguments );
         if ( $scheduled ) {
             $this->outbox->set_scheduled_action( (int) $row['id'], (int) $row['generation'], 0 );
+            PKC_Observability::record( 'scheduler', 'wp_cron' );
+        } else {
+            PKC_Observability::record( 'scheduler', 'failure' );
         }
         return $scheduled;
     }
@@ -671,10 +681,14 @@ class PKC_Order_Sync {
      * Repair missing wake-ups and recover stale claims in bounded batches.
      */
     public function dispatch_due_outbox(): void {
+        $succeeded = true;
         foreach ( $this->outbox->due( 100 ) as $row ) {
-            $this->schedule_outbox_wakeup( $row, time() );
+            if ( ! $this->schedule_outbox_wakeup( $row, time() ) ) {
+                $succeeded = false;
+            }
         }
         $this->outbox->maybe_cleanup();
+        PKC_Observability::record( 'sweep', $succeeded ? 'success' : 'failure' );
     }
 
     /**

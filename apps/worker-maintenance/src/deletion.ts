@@ -1,10 +1,17 @@
 import { prisma } from "@personalise-kings/db";
-import { createObjectStorageFromEnv, type ObjectKey } from "@personalise-kings/storage";
+import { createObjectStorageFromEnv, isObjectKeyForTenant, type StorageClass } from "@personalise-kings/storage";
 import { Prisma, type DeletionRequest } from "@prisma/client";
 import { addCounter } from "@personalise-kings/observability/telemetry";
 
 const staleClaimMs = 15 * 60 * 1000;
 const maximumAttempts = 10;
+const erasableStorageClasses: readonly StorageClass[] = [
+  "temporary_upload",
+  "draft_customisation_asset",
+  "order_bound_customer_asset",
+  "quarantined_file",
+  "preview_derivative"
+];
 
 interface DeletionPlan {
   sourceVersionIds: string[];
@@ -29,10 +36,13 @@ export async function processNextDeletionRequest() {
       addCounter("pk.deletion.attempts", 1, { outcome: plan.outcome });
       return true;
     }
+    if (!deletionPlanKeysAreSafe(plan.objectKeys, request.merchantId)) {
+      throw new Error("Deletion plan contains an object outside the merchant erasure boundary");
+    }
     const storage = createObjectStorageFromEnv();
     for (const key of plan.objectKeys) {
       await renewDeletionClaim(request);
-      await storage.deleteObject(key as ObjectKey);
+      await storage.deleteObject(key);
     }
     await renewDeletionClaim(request);
     await finalizeDeletion(request, plan);
@@ -268,6 +278,10 @@ export function jsonContainsExact(value: unknown, targets: ReadonlySet<string>):
   if (Array.isArray(value)) return value.some((item) => jsonContainsExact(item, targets));
   if (value && typeof value === "object") return Object.values(value).some((item) => jsonContainsExact(item, targets));
   return false;
+}
+
+export function deletionPlanKeysAreSafe(keys: readonly string[], merchantId: string) {
+  return keys.every((key) => isObjectKeyForTenant(key, merchantId, erasableStorageClasses));
 }
 
 function parsePlan(value: Prisma.JsonValue | null): DeletionPlan | null {

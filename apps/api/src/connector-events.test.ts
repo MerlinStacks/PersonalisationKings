@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { connectorOutboxEventType, isStaleOrderEvent, printJobLifecycleTransition } from "./connector-events";
+import { connectorOutboxEventType, enqueueReceiptWakeup, isStaleOrderEvent, printJobLifecycleTransition } from "./connector-events";
 
 describe("print job lifecycle transitions", () => {
   it.each(["queued", "failed"] as const)("cancels %s work before production completes", (status) => {
@@ -52,5 +52,24 @@ describe("connector outbox events", () => {
     expect(connectorOutboxEventType(event("order.cancelled", "cancelled"))).toBe("print_jobs.lifecycle_review");
     expect(connectorOutboxEventType(event("order.refunded", "partially-refunded"))).toBe("print_jobs.lifecycle_review");
     expect(connectorOutboxEventType(event("order.updated", "processing"))).toBe("order.synced");
+  });
+});
+
+describe("connector inbox wake-ups", () => {
+  it("enqueues accepted and duplicate durable receipts", async () => {
+    const deliveryIds: string[] = [];
+    const enqueue = async (deliveryId: string) => { deliveryIds.push(deliveryId); return true; };
+    await expect(enqueueReceiptWakeup({ status: "accepted", deliveryId: "delivery-1" }, enqueue)).resolves.toEqual({ outcome: "enqueued" });
+    await expect(enqueueReceiptWakeup({ status: "duplicate", deliveryId: "delivery-1" }, enqueue)).resolves.toEqual({ outcome: "enqueued" });
+    expect(deliveryIds).toEqual(["delivery-1", "delivery-1"]);
+  });
+
+  it("does not enqueue conflicts and absorbs Redis failure", async () => {
+    const enqueue = async () => { throw new Error("redis unavailable"); };
+    await expect(enqueueReceiptWakeup({ status: "identity_conflict" }, enqueue)).resolves.toEqual({ outcome: "not_applicable" });
+    await expect(enqueueReceiptWakeup({ status: "accepted", deliveryId: "delivery-1" }, enqueue)).resolves.toEqual({
+      outcome: "failed",
+      error: "redis unavailable"
+    });
   });
 });

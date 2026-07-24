@@ -1,4 +1,4 @@
-import { encryptStoreWebhookSecret, hashPassword } from "@personalise-kings/auth";
+import { encryptVersionedConnectorSecret, hashPassword } from "@personalise-kings/auth";
 import { assertDemoSeedAllowed } from "@personalise-kings/config/server";
 import { PrismaClient } from "@prisma/client";
 
@@ -10,7 +10,11 @@ async function main() {
   const connectorEncryptionKey = process.env.PK_CONNECTOR_SECRET_ENCRYPTION_KEY || Buffer.alloc(32, 1).toString("base64");
   const connectorSecret = process.env.PK_DEMO_CONNECTOR_SECRET || "dev-connector-secret-change-me";
   const demoKeyId = "demo-key";
-  const encryptedDemoSecret = encryptStoreWebhookSecret(connectorSecret, connectorEncryptionKey, "seed-store", demoKeyId);
+  const encryptedDemoSecret = encryptVersionedConnectorSecret(
+    connectorSecret,
+    { activeKeyId: "legacy", keys: { legacy: connectorEncryptionKey } },
+    { purpose: "store-webhook", merchantId: "seed-merchant", storeId: "seed-store", signingKeyId: demoKeyId }
+  );
 
   const merchant = await prisma.merchant.upsert({
     where: { id: "seed-merchant" },

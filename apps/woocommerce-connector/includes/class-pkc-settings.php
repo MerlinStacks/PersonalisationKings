@@ -82,6 +82,8 @@ class PKC_Settings {
         $outbox_page = min( $outbox_page, $outbox_pages );
         $outbox_rows = $this->outbox->recent( 50, $outbox_status, ( $outbox_page - 1 ) * 50 );
         $outbox_counts = $this->outbox->status_counts();
+        $health_snapshot = $this->outbox->health_snapshot();
+        $diagnostic_summary = PKC_Observability::summary();
         $this->render_outbox_notice();
         ?>
         <div class="wrap">
@@ -123,8 +125,19 @@ class PKC_Settings {
                     <tr><th><?php echo esc_html__( 'Orders reconciled', 'personalise-kings-connector' ); ?></th><td><?php echo esc_html( (string) get_option( self::OPTION_LAST_RECONCILIATION_COUNT, 0 ) ); ?></td></tr>
                     <tr><th><?php echo esc_html__( 'Reconciliation watermark', 'personalise-kings-connector' ); ?></th><td><?php echo esc_html( $watermark_display ); ?></td></tr>
                     <tr><th><?php echo esc_html__( 'Reconciliation error', 'personalise-kings-connector' ); ?></th><td><?php echo esc_html( (string) get_option( self::OPTION_RECONCILIATION_ERROR, __( 'None', 'personalise-kings-connector' ) ) ); ?></td></tr>
+                    <tr><th><?php echo esc_html__( 'Oldest due delivery', 'personalise-kings-connector' ); ?></th><td><?php echo esc_html( (int) $health_snapshot['oldest_due_age'] . 's' ); ?></td></tr>
+                    <tr><th><?php echo esc_html__( 'Stale delivery claims', 'personalise-kings-connector' ); ?></th><td><?php echo esc_html( (string) (int) $health_snapshot['stale_claims'] ); ?></td></tr>
+                    <tr><th><?php echo esc_html__( 'Successful deliveries (14 days)', 'personalise-kings-connector' ); ?></th><td><?php echo esc_html( (string) (int) ( $diagnostic_summary['delivery:success'] ?? 0 ) ); ?></td></tr>
+                    <tr><th><?php echo esc_html__( 'Delivery retries (14 days)', 'personalise-kings-connector' ); ?></th><td><?php echo esc_html( (string) (int) ( $diagnostic_summary['delivery:retry'] ?? 0 ) ); ?></td></tr>
+                    <tr><th><?php echo esc_html__( 'Permanent delivery failures (14 days)', 'personalise-kings-connector' ); ?></th><td><?php echo esc_html( (string) (int) ( $diagnostic_summary['delivery:failure'] ?? 0 ) ); ?></td></tr>
                 </tbody>
             </table>
+            <p><?php echo wp_kses_post( sprintf( __( 'Detailed redacted diagnostics are available in <a href="%s">Site Health</a>. Counters retain 14 UTC days. Delivered events are retained for 30 days and failed/cancelled events for 90 days; active queue records do not expire.', 'personalise-kings-connector' ), esc_url( admin_url( 'site-health.php?tab=debug' ) ) ) ); ?></p>
+            <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
+                <input type="hidden" name="action" value="pkc_reset_observability" />
+                <?php wp_nonce_field( 'pkc_reset_observability' ); ?>
+                <?php submit_button( __( 'Reset diagnostic counters', 'personalise-kings-connector' ), 'secondary', 'submit', false ); ?>
+            </form>
             <h2><?php echo esc_html__( 'Delivery Queue', 'personalise-kings-connector' ); ?></h2>
             <p><?php echo esc_html__( 'The outbox row is the durable event. Action Scheduler and WP-Cron are replaceable wake-ups, so a missing scheduler action cannot lose an order update.', 'personalise-kings-connector' ); ?></p>
             <p>

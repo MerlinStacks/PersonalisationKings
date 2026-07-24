@@ -222,6 +222,70 @@ export function decryptConnectorSecret(encrypted: string, encryptionKey: string)
   }
 }
 
+export interface ConnectorWrappingKeyring {
+  activeKeyId: string;
+  keys: Record<string, string>;
+}
+
+export type ConnectorSecretContext =
+  | { purpose: "woocommerce-rest"; merchantId: string; storeId: string }
+  | { purpose: "store-webhook"; merchantId: string; storeId: string; signingKeyId: string };
+
+export function encryptVersionedConnectorSecret(secret: string, keyring: ConnectorWrappingKeyring, context: ConnectorSecretContext) {
+  if (!secret) throw new Error("Connector secret must not be empty");
+  const encryptionKey = keyring.keys[keyring.activeKeyId];
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(keyring.activeKeyId) || !encryptionKey) {
+    throw new Error("The active connector wrapping key is not configured");
+  }
+  const nonce = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", decodeEncryptionKey(encryptionKey, "connector wrapping key"), nonce);
+  cipher.setAAD(Buffer.from(connectorSecretAad(keyring.activeKeyId, context)));
+  const ciphertext = Buffer.concat([cipher.update(secret, "utf8"), cipher.final()]);
+  return `connector-aes-256-gcm:v3:${keyring.activeKeyId}:${nonce.toString("base64url")}:${cipher.getAuthTag().toString("base64url")}:${ciphertext.toString("base64url")}`;
+}
+
+export function decryptVersionedConnectorSecret(encrypted: string, keyring: ConnectorWrappingKeyring, context: ConnectorSecretContext) {
+  if (!encrypted || encrypted.length > 16_384) return null;
+  if (encrypted.startsWith("connector-aes-256-gcm:v3:")) {
+    const parts = encrypted.split(":");
+    if (parts.length !== 6) return null;
+    const [algorithm, version, keyId, nonceValue, tagValue, ciphertextValue] = parts;
+    const encryptionKey = keyId ? keyring.keys[keyId] : undefined;
+    if (algorithm !== "connector-aes-256-gcm" || version !== "v3" || !keyId || !encryptionKey
+      || !isCanonicalBase64Url(nonceValue ?? "", 12) || !isCanonicalBase64Url(tagValue ?? "", 16)
+      || !isCanonicalBase64Url(ciphertextValue ?? "")) return null;
+    try {
+      const decipher = createDecipheriv("aes-256-gcm", decodeEncryptionKey(encryptionKey, "connector wrapping key"), Buffer.from(nonceValue!, "base64url"));
+      decipher.setAAD(Buffer.from(connectorSecretAad(keyId, context)));
+      decipher.setAuthTag(Buffer.from(tagValue!, "base64url"));
+      return Buffer.concat([decipher.update(Buffer.from(ciphertextValue!, "base64url")), decipher.final()]).toString("utf8");
+    } catch {
+      return null;
+    }
+  }
+
+  const legacyKey = keyring.keys.legacy;
+  if (!legacyKey) return null;
+  return context.purpose === "store-webhook"
+    ? decryptStoreWebhookSecret(encrypted, legacyKey, context.storeId, context.signingKeyId)
+    : decryptConnectorSecret(encrypted, legacyKey);
+}
+
+export function connectorCiphertextKeyId(encrypted: string) {
+  if (encrypted.startsWith("connector-aes-256-gcm:v3:")) {
+    const parts = encrypted.split(":");
+    return parts.length === 6 && /^[A-Za-z0-9_-]{1,64}$/.test(parts[2] ?? "") ? parts[2]! : null;
+  }
+  return encrypted.startsWith("aes-256-gcm:") || encrypted.startsWith("connector-aes-256-gcm:v2:") ? "legacy" : null;
+}
+
+function connectorSecretAad(keyId: string, context: ConnectorSecretContext) {
+  if (!context.merchantId || !context.storeId) throw new Error("Connector secret tenant and store context is required");
+  return context.purpose === "store-webhook"
+    ? `pk-connector:v3:${keyId}:store-webhook:${context.merchantId}:${context.storeId}:${context.signingKeyId}`
+    : `pk-connector:v3:${keyId}:woocommerce-rest:${context.merchantId}:${context.storeId}`;
+}
+
 function decodeEncryptionKey(value: string, name: string) {
   const key = Buffer.from(value, "base64");
   if (key.length !== 32) throw new Error(`${name} must be a base64-encoded 32-byte key`);

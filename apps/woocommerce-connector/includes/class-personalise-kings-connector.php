@@ -8,6 +8,7 @@
 defined( 'ABSPATH' ) || exit;
 
 require_once PKC_PATH . 'includes/class-pkc-outbox.php';
+require_once PKC_PATH . 'includes/class-pkc-observability.php';
 require_once PKC_PATH . 'includes/class-pkc-settings.php';
 require_once PKC_PATH . 'includes/class-pkc-frontend.php';
 require_once PKC_PATH . 'includes/class-pkc-order-sync.php';
@@ -35,6 +36,7 @@ class Personalise_Kings_Connector {
      */
     private function __construct() {
         $outbox = new PKC_Outbox();
+        new PKC_Observability( $outbox );
         new PKC_Settings( $outbox );
         $this->frontend = new PKC_Frontend();
         new PKC_Order_Sync( $outbox );

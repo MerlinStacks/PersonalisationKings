@@ -1,10 +1,11 @@
-import { decryptStoreWebhookSecret } from "@personalise-kings/auth";
+import { decryptVersionedConnectorSecret } from "@personalise-kings/auth";
+import { connectorWrappingKeyring } from "@personalise-kings/config/server";
 import { prisma } from "@personalise-kings/db";
 import { createHmac, timingSafeEqual } from "node:crypto";
 
 export async function authenticateStoreRequest(storeId: string, keyId: string, signature: string, rawBody: string) {
-  const encryptionKey = process.env.PK_CONNECTOR_SECRET_ENCRYPTION_KEY;
-  if (!encryptionKey) return { status: "not_configured" as const };
+  let keyring;
+  try { keyring = connectorWrappingKeyring(); } catch { return { status: "not_configured" as const }; }
 
   const signingKey = await prisma.storeWebhookSigningKey.findFirst({
     where: { storeId, keyId, revokedAt: null, store: { connectionStatus: "connected" } },
@@ -12,7 +13,12 @@ export async function authenticateStoreRequest(storeId: string, keyId: string, s
   });
   if (!signingKey) return { status: "invalid_key" as const };
 
-  const secret = decryptStoreWebhookSecret(signingKey.secretEncrypted, encryptionKey, storeId, keyId);
+  const secret = decryptVersionedConnectorSecret(signingKey.secretEncrypted, keyring, {
+    purpose: "store-webhook",
+    merchantId: signingKey.merchantId,
+    storeId,
+    signingKeyId: keyId
+  });
   if (!secret) return { status: "not_configured" as const };
   if (!isValidHmac(signature, rawBody, secret)) return { status: "invalid_signature" as const };
   return { status: "authenticated" as const, store: signingKey.store, signingKey: { id: signingKey.id, keyId, retiredAt: signingKey.retiredAt } };

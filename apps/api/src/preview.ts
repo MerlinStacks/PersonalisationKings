@@ -1,7 +1,7 @@
 import { PREVIEW_RENDERER_VERSION, renderSceneSvg } from "@personalise-kings/design-engine";
 import { prisma } from "@personalise-kings/db";
 import { sceneGraphSchema } from "@personalise-kings/render-schema";
-import { createObjectStorageFromEnv, objectKey, type ObjectKey } from "@personalise-kings/storage";
+import { createObjectStorageFromEnv, isObjectKeyForTenant, objectKey } from "@personalise-kings/storage";
 
 interface PreviewAssetVersion {
   id: string;
@@ -23,7 +23,10 @@ export async function generateRevisionPreview(
   }
   const storage = createObjectStorageFromEnv();
   const sources = await Promise.all(versions.map(async (version) => {
-    const bytes = await storage.getObject(version.objectKey as ObjectKey);
+    if (!isObjectKeyForTenant(version.objectKey, merchantId, ["merchant_design_asset", "draft_customisation_asset", "order_bound_customer_asset"])) {
+      throw new TypeError("Preview source object key does not belong to the merchant");
+    }
+    const bytes = await storage.getObject(version.objectKey);
     return {
       assetVersionId: version.id,
       contentType: version.contentType,

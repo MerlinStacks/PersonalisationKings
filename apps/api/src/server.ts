@@ -4,7 +4,7 @@ import { validateServiceEnvironment } from "@personalise-kings/config/server";
 import { getOrCreateCorrelationId } from "@personalise-kings/observability";
 import { addCounter, initializeTelemetry, recordHistogram, shutdownTelemetry, SpanStatusCode, withServerSpan } from "@personalise-kings/observability/telemetry";
 import { authenticateStoreRequest } from "./connector-auth";
-import { ingestConnectorEvent, InvalidCustomisationReferenceError } from "./connector-events";
+import { closeConnectorEventWakeups, ingestConnectorEvent, InvalidCustomisationReferenceError } from "./connector-events";
 import {
   customiserOrigin,
   handleCreateCustomiserUpload,
@@ -103,7 +103,7 @@ export async function handleApiRequest(request: Request, peerAddress = "unknown"
         }
 
         const result = await ingestConnectorEvent(parsed.data, correlationId);
-        const status = result.status === "unknown_store" ? 404 : result.status === "replayed_nonce" ? 409 : 200;
+        const status = result.status === "unknown_store" ? 404 : result.status === "identity_conflict" ? 409 : 200;
         return Response.json({ ...result, eventId: parsed.data.event_id, correlationId }, { status });
       }
       return Response.json({ error: "not_found", correlationId }, { status: 404 });
@@ -148,8 +148,9 @@ const server = Bun.serve({
 
 async function shutdown() {
   await server.stop(false);
+  await closeConnectorEventWakeups();
   await shutdownTelemetry().catch(() => undefined);
-  process.exit(0);
+  process.exitCode = 0;
 }
 
 process.once("SIGINT", () => void shutdown());

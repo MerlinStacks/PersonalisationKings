@@ -8,7 +8,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
     "prisma": "prisma",
-    "seed": "bun src/seed.ts"
+    "seed": "bun src/seed.ts",
+    "reencrypt-connector-secrets": "bun src/reencrypt-connector-secrets.ts"
   },
   "dependencies": {
     "@personalise-kings/auth": "workspace:*",

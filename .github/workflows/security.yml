@@ -3,6 +3,7 @@ name: Security
 on:
   push:
     branches: [main, develop]
+    tags: ["v*.*.*"]
   pull_request:
   schedule:
     - cron: "23 4 * * 1"
@@ -81,6 +82,9 @@ jobs:
           - name: postgres
             target: ""
             image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+          - name: redis
+            target: ""
+            image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - name: Build application image
@@ -124,3 +128,30 @@ jobs:
           output-file: sbom.spdx.json
           upload-artifact: true
           artifact-name: personalise-kings-sbom
+
+  release-sboms:
+    name: Publish release SBOMs
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [dependencies, secrets, configuration, containers, sbom]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+      - name: Verify release commit is on main
+        run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+      - name: Download release SBOMs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: "*-sbom"
+          path: release-sboms
+          merge-multiple: true
+      - name: Generate SBOM checksums
+        run: (cd release-sboms && sha256sum -- *.spdx.json > SHA256SUMS)
+      - name: Create immutable GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" release-sboms/* --verify-tag --target "$GITHUB_SHA" --title "$GITHUB_REF_NAME" --generate-notes

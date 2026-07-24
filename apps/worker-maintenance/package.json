@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@personalise-kings/config": "workspace:*",
+    "@personalise-kings/connector-processing": "workspace:*",
     "@personalise-kings/db": "workspace:*",
     "@personalise-kings/observability": "workspace:*",
     "@personalise-kings/storage": "workspace:*",

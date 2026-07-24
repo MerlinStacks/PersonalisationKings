@@ -1,14 +1,19 @@
-import { encryptStoreWebhookSecret } from "@personalise-kings/auth";
+import { encryptVersionedConnectorSecret } from "@personalise-kings/auth";
+import { connectorWrappingKeyring } from "@personalise-kings/config/server";
 import { prisma } from "@personalise-kings/db";
 import { randomBytes } from "node:crypto";
 import { writeAuditEvent } from "./audit";
 
 export async function rotateStoreSigningKey(storeId: string, merchantId: string, actorUserId: string) {
-  const encryptionKey = process.env.PK_CONNECTOR_SECRET_ENCRYPTION_KEY;
-  if (!encryptionKey) throw new Error("Connector secret encryption is not configured");
+  const keyring = connectorWrappingKeyring();
   const keyId = `pk_${randomBytes(16).toString("base64url")}`;
   const secret = randomBytes(32).toString("base64url");
-  const encrypted = encryptStoreWebhookSecret(secret, encryptionKey, storeId, keyId);
+  const encrypted = encryptVersionedConnectorSecret(secret, keyring, {
+    purpose: "store-webhook",
+    merchantId,
+    storeId,
+    signingKeyId: keyId
+  });
   const result = await prisma.$transaction(async (tx) => {
     const store = await tx.store.findFirst({ where: { id: storeId, merchantId } });
     if (!store) return null;

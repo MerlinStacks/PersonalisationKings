@@ -1,5 +1,6 @@
 import { getOptionalAdminSession } from "../../lib/session";
 import { redirect } from "next/navigation";
+import { PasskeyLogin } from "../../components/passkey-login";
 
 export default async function LoginPage({ searchParams }: Readonly<{
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -33,6 +34,7 @@ export default async function LoginPage({ searchParams }: Readonly<{
           </label>
           <button type="submit">Log in</button>
         </form>
+        <PasskeyLogin />
       </section>
     </main>
   );

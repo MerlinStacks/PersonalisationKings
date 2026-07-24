@@ -10,6 +10,7 @@ RUN bun install --frozen-lockfile \
 FROM build AS runtime
 
 ENV NODE_ENV=production \
+    OBJECT_STORAGE_BACKEND=local \
     OBJECT_STORAGE_ROOT=/data/personalise-kings/objects
 
 RUN mkdir -p /data/personalise-kings/objects \

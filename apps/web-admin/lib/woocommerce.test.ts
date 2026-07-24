@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { encryptConnectorSecret } from "@personalise-kings/auth";
 import {
   buildWooCommerceAuthorizeUrl,
   decryptWooCommerceCredentials,
@@ -67,11 +68,25 @@ describe("WooCommerce native authorization", () => {
 describe("WooCommerce credential encryption", () => {
   it("round-trips the credential pair without exposing it in ciphertext", () => {
     const key = Buffer.alloc(32, 9).toString("base64");
+    const keyring = { activeKeyId: "next", keys: { legacy: Buffer.alloc(32, 8).toString("base64"), next: key } };
     const credentials = { consumerKey: "ck_1234567890", consumerSecret: "cs_1234567890" };
-    const encrypted = encryptWooCommerceCredentials(credentials, key);
+    const encrypted = encryptWooCommerceCredentials(credentials, keyring, "merchant-1", "store-1");
     expect(encrypted).not.toContain(credentials.consumerKey);
     expect(encrypted).not.toContain(credentials.consumerSecret);
-    expect(decryptWooCommerceCredentials(encrypted, key)).toEqual(credentials);
-    expect(decryptWooCommerceCredentials(encrypted, Buffer.alloc(32, 8).toString("base64"))).toBeNull();
+    expect(decryptWooCommerceCredentials(encrypted, keyring, "merchant-1", "store-1")).toEqual(credentials);
+    expect(decryptWooCommerceCredentials(encrypted, keyring, "merchant-2", "store-1")).toBeNull();
+    expect(decryptWooCommerceCredentials(encrypted, keyring, "merchant-1", "store-2")).toBeNull();
+  });
+
+  it("reads legacy credentials only through the legacy wrapping key", () => {
+    const legacy = Buffer.alloc(32, 7).toString("base64");
+    const credentials = { consumerKey: "ck_legacy", consumerSecret: "cs_legacy" };
+    const encrypted = encryptConnectorSecret(JSON.stringify(credentials), legacy);
+    expect(decryptWooCommerceCredentials(
+      encrypted,
+      { activeKeyId: "next", keys: { legacy, next: Buffer.alloc(32, 8).toString("base64") } },
+      "merchant-1",
+      "store-1"
+    )).toEqual(credentials);
   });
 });
